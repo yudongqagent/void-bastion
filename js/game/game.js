@@ -22,7 +22,7 @@
 import {
   enemyHP, enemyCount, enemySpeed, enemyDamage, coinValue, waveClearBonus,
   spawnWindow, isBossWave, bossStats, spawnTable, ABILITIES, deriveStats,
-  BOSS_INTERVAL, TUNING,
+  BOSS_INTERVAL, TUNING, WEAPONS, ELITE, eliteChance,
 } from './balance.js';
 import { sectorForWave, sectorNumber, isSectorStart } from './sectors.js';
 
@@ -100,11 +100,13 @@ const newEnemy = () => ({
   shield: 0, maxShield: 0, hitFlash: 0, splits: 0, boss: false, ranged: false,
   fireT: 0, phase: false, phaseT: 0, distScale: 1, stun: 0,
   behavior: 'dive', t: 0, homeX: 0, amp: 0, freq: 0, holdY: 0, face: 0,
+  weapon: null, wcd: 0, elite: false, burst: 0, burstT: 0, spin2: 0,
 });
 
 const newBullet = () => ({
   active: false, x: 0, y: 0, vx: 0, vy: 0, dmg: 0, pierce: 1, life: 0,
   crit: false, radius: 3, hits: null, fromEnemy: false,
+  homing: 0, drag: 0, minSpeed: 0,
 });
 
 const newParticle = () => ({
@@ -174,6 +176,7 @@ export class Game {
     this.lance = null;
     this.storm = null;
     this.stormTimer = 5;
+    this.beams = [];
 
     this.sector = sectorForWave(1, BOSS_INTERVAL);
     this._statsDirty = true;
@@ -383,20 +386,26 @@ export class Game {
     const baseSpd = enemySpeed(wave);
     const baseCoin = coinValue(wave) / SWARM_DENSITY;
 
+    const eliteRate = eliteChance(wave);
     this.spawnQueue.length = 0;
     for (let i = 0; i < count; i++) {
       let r = Math.random() * total, pick = table[0];
       for (const t of table) { r -= t.weight; if (r <= 0) { pick = t; break; } }
       const a = pick.arch;
+      const elite = Math.random() < eliteRate;
+      const E = elite ? ELITE : null;
       this.spawnQueue.push({
         type: pick.key,
-        hp: baseHP * a.hp * (sec.hpMult || 1),
-        speed: baseSpd * a.speed * (sec.speedMult || 1),
-        dmg: baseDmg * a.dmg,
-        coin: baseCoin * a.coin * (sec.coinMult || 1),
-        radius: a.radius, sides: a.sides,
-        shield: a.shield ? baseHP * a.shield * 0.5 : 0,
-        ranged: !!a.ranged, phase: !!a.phase,
+        elite,
+        hp: baseHP * a.hp * (sec.hpMult || 1) * (E ? E.hp : 1),
+        speed: baseSpd * a.speed * (sec.speedMult || 1) * (E ? E.speed : 1),
+        dmg: baseDmg * a.dmg * (E ? E.dmg : 1),
+        coin: baseCoin * a.coin * (sec.coinMult || 1) * (E ? E.coin : 1),
+        radius: a.radius * (E ? E.radius : 1), sides: a.sides,
+        shield: a.shield ? baseHP * a.shield * 0.5 * (E ? E.hp : 1) : 0,
+        phase: !!a.phase,
+        // An elite always brings a gun, even if its archetype rams for a living.
+        weapon: a.weapon || (elite ? ELITE.fallbackWeapon : null),
         splits: pick.key === 'splitter' ? 2 : 0,
       });
     }
@@ -487,7 +496,10 @@ export class Game {
     e.shield = e.maxShield = def.shield || 0;
     e.type = def.type;
     e.boss = !!def.boss;
-    e.ranged = !!def.ranged;
+    e.elite = !!def.elite;
+    e.weapon = def.weapon || null;
+    e.wcd = 0.6 + Math.random() * 1.4;
+    e.burst = 0; e.burstT = 0; e.spin2 = Math.random() * TAU;
     e.phase = !!def.phase;
     e.splits = def.splits || 0;
     e.color = COLORS[def.type] || COLORS.drone;
@@ -506,11 +518,20 @@ export class Game {
     // Behaviour by archetype. "Most enemies attack by bumping" — dive and
     // swarm both end in a ram, which is why contact damage still drives the
     // balance model.
-    if (def.boss) { e.behavior = 'boss'; e.holdY = this.y0 + this.fieldH * 0.22; }
-    else if (def.ranged) { e.behavior = 'hover'; e.holdY = this.y0 + this.fieldH * (0.22 + Math.random() * 0.2); }
-    else if (def.type === 'darter' || def.type === 'wraith') e.behavior = 'swarm';
-    else if (def.type === 'splitter' || def.type === 'shielder') e.behavior = 'weave';
-    else e.behavior = 'dive';
+    if (def.boss) {
+      e.behavior = 'boss';
+      e.holdY = this.y0 + this.fieldH * 0.22;
+    } else if (def.weapon && def.weapon !== ELITE.fallbackWeapon) {
+      // Artillery holds station and shoots; it is not trying to reach you.
+      e.behavior = 'hover';
+      e.holdY = this.y0 + this.fieldH * (0.16 + Math.random() * 0.42);
+    } else if (def.type === 'darter' || def.type === 'wraith') {
+      e.behavior = 'swarm';
+    } else if (def.type === 'splitter' || def.type === 'shielder') {
+      e.behavior = 'weave';
+    } else {
+      e.behavior = 'dive';
+    }
 
     if (def.boss) { this.shake(14); this.flash([0.35, 0.05, 0.1], 0.5); }
     return e;
@@ -566,6 +587,15 @@ export class Game {
       ax += px * side * urgency * 2400;
       ay += py * side * urgency * 600;
     }
+    // Beam columns: slide out of the lane rather than trying to outrun it.
+    for (const bm of this.beams) {
+      const dx = ship.x - bm.x;
+      const reach = bm.w * 0.5 + 70;
+      if (Math.abs(dx) > reach || ship.y < bm.y) continue;
+      const urgency = 1 - Math.abs(dx) / reach;
+      ax += (dx >= 0 ? 1 : -1) * urgency * 4200;
+    }
+
     for (const d of this.debris.items) {
       if (!d.active) continue;
       const dx = ship.x - d.x, dy = ship.y - d.y;
@@ -719,6 +749,121 @@ export class Game {
     this.synth.shot(1 + (this.buffs.overdrive > 0 ? 0.25 : 0));
   }
 
+  /** Spawn one hostile projectile. */
+  enemyShot(e, ang, w, speedMul = 1) {
+    const b = this.bullets.obtain();
+    b.active = true;
+    b.x = e.x + Math.cos(ang) * e.radius * 0.8;
+    b.y = e.y + Math.sin(ang) * e.radius * 0.8;
+    const sp = w.speed * speedMul;
+    b.vx = Math.cos(ang) * sp;
+    b.vy = Math.sin(ang) * sp;
+    b.dmg = e.dmg * w.dmg * TUNING.WEAPON_SCALE;
+    b.pierce = 1;
+    b.life = w.life || 6;
+    b.radius = e.elite ? 5.5 : 4.5;
+    b.crit = false;
+    b.fromEnemy = true;
+    b.homing = w.homing || 0;
+    b.drag = w.drag || 0;
+    b.minSpeed = w.drag ? sp * 0.22 : 0;
+    b.hits = b.hits || new Set();
+    b.hits.clear();
+    return b;
+  }
+
+  /**
+   * Run one enemy's armament.
+   *
+   * This is where difficulty actually lives. Contact damage is close to free
+   * against an autopilot that dodges, so the swarm's real threat is ordnance —
+   * aimed shots, decelerating homing volleys, radial sprays and beam columns —
+   * which arrives faster than any pilot can side-step all of it.
+   */
+  fireWeapon(e, dt) {
+    const w = WEAPONS[e.weapon];
+    if (!w) return;
+    const ship = this.ship;
+
+    // Multi-shot volleys walk out over `gap` rather than appearing as one wall.
+    if (e.burst > 0) {
+      e.burstT -= dt;
+      if (e.burstT <= 0) {
+        e.burst--;
+        e.burstT = w.gap || 0.1;
+        const ang = Math.atan2(ship.y - e.y, ship.x - e.x);
+        this.enemyShot(e, ang, w);
+        this.synth.hit();
+      }
+      return;
+    }
+
+    e.wcd -= dt;
+    if (e.wcd > 0) return;
+    e.wcd = w.cd * (0.8 + Math.random() * 0.4);
+
+    switch (e.weapon) {
+      case 'beam': {
+        // Telegraphed: a thin sight-line first, so the column is dodgeable if
+        // you are paying attention and punishing if you are not.
+        this.beams.push({ x: e.x, y: e.y, t: 0, dmg: e.dmg * w.dmg * TUNING.WEAPON_SCALE, owner: e, w: w.width });
+        e.wcd = w.cd;
+        break;
+      }
+      case 'radial': {
+        e.spin2 += 0.4;
+        for (let i = 0; i < w.count; i++) {
+          this.enemyShot(e, e.spin2 + (i / w.count) * TAU, w);
+        }
+        this.synth.shot(0.6);
+        break;
+      }
+      case 'spread': {
+        const base = Math.atan2(ship.y - e.y, ship.x - e.x);
+        for (let i = 0; i < w.count; i++) {
+          this.enemyShot(e, base + (i - (w.count - 1) / 2) * w.spread, w);
+        }
+        this.synth.shot(0.5);
+        break;
+      }
+      case 'homing': {
+        const base = Math.atan2(ship.y - e.y, ship.x - e.x);
+        for (let i = 0; i < w.count; i++) {
+          this.enemyShot(e, base + (i - (w.count - 1) / 2) * w.spread, w);
+        }
+        this.synth.ability();
+        break;
+      }
+      case 'burst': {
+        e.burst = w.count;
+        e.burstT = 0;
+        break;
+      }
+      default: {
+        this.enemyShot(e, Math.atan2(ship.y - e.y, ship.x - e.x), w);
+        this.synth.hit();
+        break;
+      }
+    }
+  }
+
+  /** Lancer beam columns: telegraph, fire, fade. */
+  updateBeams(dt) {
+    const w = WEAPONS.beam;
+    for (let i = this.beams.length - 1; i >= 0; i--) {
+      const bm = this.beams[i];
+      bm.t += dt;
+      if (bm.owner && bm.owner.active) { bm.x = bm.owner.x; bm.y = bm.owner.y; }
+      if (bm.t > w.telegraph && bm.t < w.telegraph + w.duration) {
+        if (Math.abs(this.ship.x - bm.x) < bm.w * 0.5 + this.ship.radius &&
+            this.ship.y > bm.y) {
+          this.damageShip(bm.dmg * dt * 2.2, null);
+        }
+      }
+      if (bm.t > w.telegraph + w.duration) this.beams.splice(i, 1);
+    }
+  }
+
   damageEnemy(e, amount, crit, showNumber = true) {
     if (e.shield > 0) {
       const absorbed = Math.min(e.shield, amount);
@@ -728,9 +873,9 @@ export class Game {
     }
     e.hp -= amount;
     e.hitFlash = 0.12;
-    if (showNumber && Math.random() < 0.3) {
+    if (showNumber && amount >= 1 && Math.random() < 0.12) {
       this.addFloater(e.x, e.y - e.radius, fmtShort(amount),
-        crit ? [1.6, 1.2, 0.4] : [1, 1, 1], crit ? 1.15 : 0.85);
+        crit ? [1.6, 1.2, 0.4] : [1, 1, 1], crit ? 1.1 : 0.8);
     }
     if (e.hp <= 0) this.killEnemy(e);
   }
@@ -892,7 +1037,7 @@ export class Game {
   }
 
   addFloater(x, y, text, color, scale = 1) {
-    if (this.floaters.length > 44) this.floaters.shift();
+    if (this.floaters.length > 20) this.floaters.shift();
     this.floaters.push({ x, y, text, color, scale, life: 0.9, maxLife: 0.9, vy: -46 });
   }
 
@@ -956,6 +1101,7 @@ export class Game {
     this.updateBackdrop(dt);
     this.updateHazards(dt);
     this.updateWave(dt);
+    this.updateBeams(dt);
     this.target = this.acquireTarget();
     this.steer(dt);
     this.spawnThrust(dt);
@@ -1072,6 +1218,23 @@ export class Game {
       }
 
       if (b.fromEnemy) {
+        if (b.drag > 0) {
+          const k = Math.pow(b.drag, dt);
+          b.vx *= k; b.vy *= k;
+          const sp = Math.hypot(b.vx, b.vy);
+          if (sp < b.minSpeed && sp > 0.01) {
+            b.vx = (b.vx / sp) * b.minSpeed;
+            b.vy = (b.vy / sp) * b.minSpeed;
+          }
+        }
+        if (b.homing > 0) {
+          const hx = this.ship.x - b.x, hy = this.ship.y - b.y;
+          const hd = Math.hypot(hx, hy) || 1;
+          const sp = Math.hypot(b.vx, b.vy) || 1;
+          const k = Math.min(1, b.homing * dt);
+          b.vx += ((hx / hd) * sp - b.vx) * k;
+          b.vy += ((hy / hd) * sp - b.vy) * k;
+        }
         const dx = b.x - this.ship.x, dy = b.y - this.ship.y;
         if (dx * dx + dy * dy < (this.ship.radius + b.radius) ** 2) {
           b.active = false;
@@ -1175,26 +1338,9 @@ export class Game {
           break;
         }
         case 'hover': {
-          // Holds high and shoots. The only archetype that does not ram.
+          // Holds station and shoots. Artillery is not trying to reach you.
           if (e.y < e.holdY) e.y += speed * dt;
-          else {
-            e.x += Math.cos(e.t * 0.9) * 70 * dt;
-            e.fireT -= dt;
-            if (e.fireT <= 0) {
-              e.fireT = 2.2;
-              const dx = ship.x - e.x, dy = ship.y - e.y;
-              const d = Math.hypot(dx, dy) || 1;
-              const b = this.bullets.obtain();
-              b.active = true;
-              b.x = e.x; b.y = e.y;
-              b.vx = (dx / d) * 260; b.vy = (dy / d) * 260;
-              b.dmg = e.dmg * 0.55;
-              b.pierce = 1; b.life = 5; b.radius = 4.5; b.crit = false;
-              b.fromEnemy = true;
-              b.hits = b.hits || new Set();
-              b.hits.clear();
-            }
-          }
+          else e.x += Math.cos(e.t * 0.9 + e.spin2) * 62 * dt;
           e.face = 0;
           break;
         }
@@ -1204,18 +1350,16 @@ export class Game {
             e.x = this.cx + Math.sin(e.t * 0.55) * this.fieldW * 0.3;
             e.fireT -= dt;
             if (e.fireT <= 0) {
-              e.fireT = 1.5;
-              for (let k = -2; k <= 2; k++) {
-                const ang = Math.PI / 2 + k * 0.24;
-                const b = this.bullets.obtain();
-                b.active = true;
-                b.x = e.x; b.y = e.y + e.radius;
-                b.vx = Math.cos(ang) * 250; b.vy = Math.sin(ang) * 250;
-                b.dmg = e.dmg * 0.28;
-                b.pierce = 1; b.life = 6; b.radius = 5; b.crit = false;
-                b.fromEnemy = true;
-                b.hits = b.hits || new Set();
-                b.hits.clear();
+              e.fireT = 1.35;
+              // Alternating fan and spiral, so a boss is a pattern to read
+              // rather than one thing to stand beside.
+              e.spin2 += 0.5;
+              const spiral = Math.floor(e.t / 4) % 2 === 1;
+              for (let k = 0; k < 7; k++) {
+                const ang = spiral
+                  ? e.spin2 + (k / 7) * TAU
+                  : Math.PI / 2 + (k - 3) * 0.22;
+                this.enemyShot(e, ang, { speed: 240, dmg: 0.30, life: 7 });
               }
             }
           }
@@ -1231,6 +1375,9 @@ export class Game {
           break;
         }
       }
+
+      // Anything armed shoots, including elites that also ram.
+      if (e.weapon && e.y > this.y0 - 10) this.fireWeapon(e, dt);
 
       if (this.lance && this.lance.t > 0 && Math.abs(e.x - ship.x) < 26) {
         this.damageEnemy(e, (enemyHP(this.state.run.wave) * 2.2 + s.damage * 8) * dt, false, false);
@@ -1312,7 +1459,7 @@ export class Game {
         if (p.kind === 'coin') {
           const gained = p.value * s.coinMult;
           run.coins += gained;
-          if (Math.random() < 0.22) {
+          if (gained >= 1 && Math.random() < 0.1) {
             this.addFloater(p.x, p.y, '+' + fmtShort(gained), COLORS.coin, 0.8);
           }
           this.synth.click();
@@ -1388,6 +1535,7 @@ export class Game {
     this.renderDebris();
     this.renderPickups(time);
     this.renderEnemies(time);
+    this.renderBeams(time);
     this.renderBullets();
     this.renderParticles();
     this.renderAbilityFX(time);
@@ -1549,6 +1697,46 @@ export class Game {
         dot(0, 0.3, 0.26, 2.1);
         break;
 
+      case 'gunship':     // rotorcraft — stub wings under a spinning disc
+        bar(0, -0.8, 0, 0.95, 0.44, 1.0);
+        bar(-0.85, -0.2, -0.85, 0.35, 0.24, 0.85);
+        bar(0.85, -0.2, 0.85, 0.35, 0.24, 0.85);
+        bar(-0.85, 0.1, 0, 0.1, 0.18, 0.7);
+        bar(0.85, 0.1, 0, 0.1, 0.18, 0.7);
+        R.ring(e.x, e.y, s * 1.15, s * 0.1, r * 0.5, g * 0.5, b * 0.5, alpha * 0.55);
+        dot(0, 0.35, 0.24, 2.0);
+        break;
+
+      case 'radial':      // turret ring — barrels facing every direction
+        gon(0, 0, 0.6, 8, 0, 0.9);
+        for (let i = 0; i < 8; i++) {
+          const a2 = (i / 8) * TAU;
+          bar(Math.cos(a2) * 0.6, Math.sin(a2) * 0.6,
+              Math.cos(a2) * 1.05, Math.sin(a2) * 1.05, 0.14, 1.0);
+        }
+        dot(0, 0, 0.3, 2.2);
+        break;
+
+      case 'lancer':      // focusing spine with prongs
+        bar(0, -1.0, 0, 1.25, 0.3, 1.0);
+        bar(-0.55, 0.35, -0.3, 1.15, 0.16, 1.2);
+        bar(0.55, 0.35, 0.3, 1.15, 0.16, 1.2);
+        bar(-0.75, -0.35, 0.75, -0.35, 0.22, 0.8);
+        dot(0, 1.2, 0.2, 2.4);
+        dot(0, -0.2, 0.24, 1.9);
+        break;
+
+      case 'dread':       // capital ship — layered slabs and sponsons
+        gon(0, 0, 0.7, 6, 0, 0.8);
+        bar(0, -1.0, 0, 1.1, 0.5, 0.95);
+        bar(-1.25, -0.3, 1.25, -0.3, 0.32, 0.9);
+        bar(-1.25, -0.3, -1.05, 0.5, 0.28, 0.85);
+        bar(1.25, -0.3, 1.05, 0.5, 0.28, 0.85);
+        bar(-1.05, 0.5, -1.05, 0.95, 0.15, 1.6);
+        bar(1.05, 0.5, 1.05, 0.95, 0.15, 1.6);
+        dot(0, -0.05, 0.3, 2.1);
+        break;
+
       case 'wraith':      // stealth delta — one clean swept wing, no fuselage
         gon(0, 0.1, 0.95, 3, 0, 0.7);
         bar(-0.95, -0.5, 0.95, -0.5, 0.18, 1.1);
@@ -1579,7 +1767,7 @@ export class Game {
     }
 
     // Engine wash trailing behind, so a craft reads as moving even when static.
-    R.glow(wx(0, -1.05), wy(0, -1.05), s * 0.85, r, g, b, 0.3 * alpha, 1.8);
+    R.glow(wx(0, -1.05), wy(0, -1.05), s * 0.8, r, g, b, 0.22 * alpha, 1.9);
   }
 
   renderEnemies(time) {
@@ -1602,9 +1790,15 @@ export class Game {
       }
 
       const hpFrac = Math.max(0, e.hp / e.maxHp);
-      R.glow(e.x, e.y, e.radius * 2.6, r, g, b, 0.2 * alpha, 2.1);
+      R.glow(e.x, e.y, e.radius * 2.4, r, g, b, 0.13 * alpha, 2.2);
       this.renderCraft(e, r, g, b, alpha);
 
+      if (e.elite) {
+        // Gold chevron ring: at a glance, "this one shoots and it hurts".
+        const p = 1 + Math.sin(time * 3 + e.spin2) * 0.05;
+        R.ring(e.x, e.y, e.radius * 1.38 * p, 1.7, 1.6, 1.15, 0.3, 0.75 * alpha);
+        R.glow(e.x, e.y, e.radius * 2.4, 1.5, 1.1, 0.35, 0.16 * alpha, 2.0);
+      }
       if (e.stun > 0) {
         R.ring(e.x, e.y, e.radius + 7 + Math.sin(time * 20) * 2, 1.6, 0.5, 0.9, 1.9, 0.8);
       }
@@ -1627,11 +1821,39 @@ export class Game {
     }
   }
 
+  renderBeams(time) {
+    const R = this.renderer;
+    const w = WEAPONS.beam;
+    for (const bm of this.beams) {
+      const bottom = this.y1 + 40;
+      if (bm.t < w.telegraph) {
+        // Warning sight-line — thin, flickering, clearly not yet lethal.
+        // Ramps in brightness and width as the shot charges, so "get out of
+        // this column" is readable at a glance rather than a hairline.
+        const k = bm.t / w.telegraph;
+        const flick = 0.5 + 0.5 * Math.abs(Math.sin(time * 24));
+        R.beam(bm.x, bm.y, bm.x, bottom, 2 + k * 5, 1.6, 0.45, 0.25, flick * k * 0.55, 0.95);
+        R.beam(bm.x, bm.y, bm.x, bottom, 1.2, 1.8, 0.9, 0.6, flick * k, 0.6);
+        R.glow(bm.x, bm.y, 26 + k * 20, 1.6, 0.5, 0.3, 0.35 * k, 1.8);
+      } else {
+        const k = 1 - (bm.t - w.telegraph) / w.duration;
+        const width = bm.w * (0.6 + 0.4 * k);
+        R.beam(bm.x, bm.y, bm.x, bottom, width, 1.6, 0.3, 0.35, 0.85 * k, 0.75);
+        R.beam(bm.x, bm.y, bm.x, bottom, width * 0.35, 1.9, 1.5, 1.6, k, 0.5);
+        R.glow(bm.x, bm.y, width * 2.2, 1.6, 0.4, 0.4, 0.5 * k, 1.6);
+      }
+    }
+  }
+
   renderBullets() {
     const R = this.renderer;
     for (const b of this.bullets.items) {
       if (!b.active) continue;
-      const c = b.fromEnemy ? [1.5, 0.5, 0.25] : (b.crit ? [1.6, 1.3, 0.5] : COLORS.bullet);
+      // Homing ordnance gets its own colour so a missile reads differently from
+      // a plain shot the instant it appears.
+      const c = b.fromEnemy
+        ? (b.homing > 0 ? [1.7, 0.35, 0.85] : [1.5, 0.5, 0.25])
+        : (b.crit ? [1.6, 1.3, 0.5] : COLORS.bullet);
       const tail = 0.026;
       R.beam(b.x - b.vx * tail, b.y - b.vy * tail, b.x, b.y, b.radius * 1.5,
         c[0], c[1], c[2], 0.85, 0.9);

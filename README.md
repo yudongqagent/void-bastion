@@ -142,6 +142,35 @@ not enough damage could sit in one wave indefinitely — neither winning nor
 dying. After 100 seconds in a single wave the survivors **enrage**: faster and
 hitting harder, without limit. The standoff always resolves.
 
+### Where difficulty actually comes from
+
+Contact damage is a dead knob. Sweeping `CONTACT_SCALE` across a 3× range moved
+median run depth by noise, because an autopilot that dodges makes ramming close
+to free. Pressure has to come from things that **cannot** be side-stepped, which
+is exactly the lesson of the reference game: Sky Force's threat is ordnance, not
+collisions. So the swarm gained three layers:
+
+* **Weight decay.** Archetypes fade toward a floor over `decay` waves as well as
+  ramping in. Without it, basic Drones are still the most common enemy at wave
+  300 and the swarm never changes character. Now the roster's centre of mass
+  drifts to the heavy, armed end — 61% Drones at wave 10, 44% heavy gunners at
+  wave 160.
+* **Elites.** A rising share of the wave (0% before 22, capping at 40%) that is
+  tougher, hits harder, pays triple, and *always carries a weapon* even if its
+  archetype rams for a living. Marked with a gold chevron ring.
+* **Real weapons.** Aimed shots, decelerating homing volleys, five-shot spreads,
+  rotating radial sprays and telegraphed beam columns, plus bosses that
+  alternate fan and spiral patterns.
+
+`WEAPON_SCALE` is the single knob for how hard the swarm shoots. Weapon damage
+is expressed relative to an enemy's *contact* damage, and at parity three elite
+volleys ended a run — a projectile connects far more often than a ram does.
+
+Measured on the real loop across a 10-prestige career: run 1 ends at wave 40 in
+~20 minutes, run 10 at wave 80 in ~29 minutes, growth steady and positive. Before
+this pass an unaided run 1 reached wave 75 and took 44 minutes, which was simply
+too easy.
+
 ### A bug worth recording
 
 Zone debris used to spawn at ~28 rocks a minute and dealt full unscaled

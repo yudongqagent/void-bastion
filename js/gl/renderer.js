@@ -257,7 +257,7 @@ export class Renderer {
     this.shake = [0, 0];
     this.flash = [0, 0, 0];
     this.bloomIntensity = 1.15;
-    this.bloomThreshold = 0.62;
+    this.bloomThreshold = 0.78;
     this.vignette = 0.55;
   }
 

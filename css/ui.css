@@ -353,6 +353,14 @@ html, body {
   overflow: hidden;
 }
 .up-val > span { overflow: hidden; text-overflow: ellipsis; }
+.v-label {
+  flex: none;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  opacity: 0.85;
+}
 .v-now   { color: var(--text-dim); }
 .v-arrow { color: var(--cyan); opacity: 0.8; flex: none; }
 .v-next  { color: var(--green); font-weight: 700; }

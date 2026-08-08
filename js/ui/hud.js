@@ -235,11 +235,17 @@ export class UI {
       r.lv.textContent = maxed ? 'MAX' : 'Lv ' + lvl;
       r.lv.classList.toggle('is-max', maxed);
       if (maxed) {
-        r.val.textContent = statText(key, stats);
+        r.val.innerHTML =
+          `<span class="v-label">${UPGRADES[key].label}</span>` +
+          `<span class="v-next">${statText(key, stats)}</span>`;
       } else {
         // "576 → 632" reads instantly; a bare current value does not tell you
         // whether the next level is worth the coins.
+        // The flavour name ("Plasma Yield") says nothing about what the number
+        // measures, and the description is hidden in the compact card — so the
+        // value line names the property itself.
         r.val.innerHTML =
+          `<span class="v-label">${UPGRADES[key].label}</span>` +
           `<span class="v-now">${statText(key, stats)}</span>` +
           `<span class="v-arrow">→</span>` +
           `<span class="v-next">${this.previewStat(key, plan.n)}</span>`;
@@ -319,7 +325,8 @@ export class UI {
             <span class="up-lv${atMax ? ' is-max' : ''}">${atMax ? 'MAX' : 'Lv ' + lvl}</span>
           </div>
           <div class="up-desc">${l.desc}</div>
-          <div class="up-val">${atMax ? now
+          <div class="up-val"><span class="v-label">${l.label}</span>${atMax
+            ? `<span class="v-next">${now}</span>`
             : `<span class="v-now">${now}</span><span class="v-arrow">→</span><span class="v-next">${next}</span>`}</div>
         </div>
         <div class="up-buy">
