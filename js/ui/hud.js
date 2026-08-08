@@ -8,7 +8,7 @@
 
 import {
   UPGRADES, LAB, ABILITIES, upgradeCost, upgradeBulkCost, affordableLevels,
-  upgradeMaxLevel, labCost, labMult, coresForRun, startingWave,
+  upgradeMaxLevel, labCost, labMult, coresForRun, startingWave, deriveStats,
   speedOptions, fmt, isBossWave,
 } from '../game/balance.js';
 
@@ -198,6 +198,19 @@ export class UI {
     this.refreshUpgrades();
   }
 
+  /**
+   * The stat this upgrade would read at `extra` more levels.
+   *
+   * Deriving the whole stat block rather than adding `add * n` is deliberate:
+   * Lab multipliers, ascension bonuses and caps all fold in, so the preview can
+   * never disagree with what the player actually gets.
+   */
+  previewStat(key, extra) {
+    const up = { ...this.state.run.upgrades };
+    up[key] = (up[key] || 0) + extra;
+    return statText(key, deriveStats(up, this.state.meta.lab, this.state.meta.prestiges));
+  }
+
   /** How many levels a click would buy, and what that costs. */
   purchasePlan(key) {
     const { run } = this.state;
@@ -221,7 +234,16 @@ export class UI {
       const maxed = plan === null;
       r.lv.textContent = maxed ? 'MAX' : 'Lv ' + lvl;
       r.lv.classList.toggle('is-max', maxed);
-      r.val.textContent = statText(key, stats);
+      if (maxed) {
+        r.val.textContent = statText(key, stats);
+      } else {
+        // "576 → 632" reads instantly; a bare current value does not tell you
+        // whether the next level is worth the coins.
+        r.val.innerHTML =
+          `<span class="v-now">${statText(key, stats)}</span>` +
+          `<span class="v-arrow">→</span>` +
+          `<span class="v-next">${this.previewStat(key, plan.n)}</span>`;
+      }
       if (maxed) {
         r.cost.textContent = '—';
         r.qty.textContent = '';
@@ -268,35 +290,41 @@ export class UI {
       const atMax = l.maxLevel != null && lvl >= l.maxLevel;
       const cost = labCost(key, lvl);
       const afford = meta.cores >= cost;
-      const el = document.createElement('div');
-      el.className = 'up ' + (atMax ? 'maxed' : afford ? 'afford' : 'poor');
-      el.dataset.key = key;
 
-      let current, next;
+      // Every track states its effect the same way the upgrade cards do:
+      // what it is now, and what one more level makes it.
+      let now, next;
       if (key === 'labStartWave') {
-        current = 'wave ' + startingWave(lvl);
+        now = 'wave ' + startingWave(lvl);
         next = 'wave ' + startingWave(lvl + 1);
       } else if (key === 'labSpeed') {
-        const opts = speedOptions(lvl);
-        current = 'up to ' + opts[opts.length - 1] + '×';
-        next = 'up to ' + speedOptions(lvl + 1).slice(-1)[0] + '×';
+        now = speedOptions(lvl).slice(-1)[0] + '×';
+        next = speedOptions(lvl + 1).slice(-1)[0] + '×';
       } else if (key === 'labStartCash') {
-        current = fmt(l.flatBase * (Math.pow(l.mul, lvl) - 1)) + ' coins';
-        next = fmt(l.flatBase * (Math.pow(l.mul, lvl + 1) - 1)) + ' coins';
+        now = fmt(l.flatBase * (Math.pow(l.mul, lvl) - 1));
+        next = fmt(l.flatBase * (Math.pow(l.mul, lvl + 1) - 1));
       } else {
-        current = '×' + labMult(key, lvl).toFixed(2);
+        now = '×' + labMult(key, lvl).toFixed(2);
         next = '×' + labMult(key, lvl + 1).toFixed(2);
       }
 
+      const el = document.createElement('div');
+      el.className = 'up lab ' + (atMax ? 'maxed' : afford ? 'afford' : 'poor');
+      el.dataset.key = key;
+      el.title = `${l.name} — ${l.desc}`;
       el.innerHTML = `
         <div class="up-main">
-          <div class="up-name">${l.name}<span class="up-lv">${atMax ? 'MAX' : 'Lv ' + lvl}</span></div>
+          <div class="up-head">
+            <span class="up-name">${l.name}</span>
+            <span class="up-lv${atMax ? ' is-max' : ''}">${atMax ? 'MAX' : 'Lv ' + lvl}</span>
+          </div>
           <div class="up-desc">${l.desc}</div>
-          <div class="up-val">${current}${atMax ? '' : ' → ' + next}</div>
+          <div class="up-val">${atMax ? now
+            : `<span class="v-now">${now}</span><span class="v-arrow">→</span><span class="v-next">${next}</span>`}</div>
         </div>
         <div class="up-buy">
-          <div class="up-cost" style="color:var(--violet)">${atMax ? '—' : fmt(cost)}</div>
-          <div class="up-qty">${atMax ? '' : 'cores'}</div>
+          <span class="up-cost">${atMax ? '—' : fmt(cost)}</span>
+          <span class="up-qty">${atMax ? '' : 'cores'}</span>
         </div>`;
       frag.appendChild(el);
     }
@@ -307,17 +335,21 @@ export class UI {
       const owned = this.state.abilityUnlocked(key);
       const afford = meta.cores >= a.cost;
       const el = document.createElement('div');
-      el.className = 'up ' + (owned ? 'maxed' : afford ? 'afford' : 'poor');
+      el.className = 'up lab ability-card ' + (owned ? 'maxed' : afford ? 'afford' : 'poor');
       el.dataset.key = key;
+      el.title = `${a.name} — ${a.desc}`;
       el.innerHTML = `
         <div class="up-main">
-          <div class="up-name">${ABILITY_GLYPH[key]} ${a.name}${owned ? '<span class="up-lv">OWNED</span>' : ''}</div>
-          <div class="up-desc">${a.desc}</div>
-          <div class="up-val">${a.cd}s cooldown</div>
+          <div class="up-head">
+            <span class="up-name"><b class="ab-mark">${ABILITY_GLYPH[key]}</b> ${a.name}</span>
+            ${owned ? '<span class="up-lv is-max">OWNED</span>' : ''}
+          </div>
+          <div class="up-val">${a.desc}</div>
+          <div class="up-sub">${a.cd}s cooldown</div>
         </div>
         <div class="up-buy">
-          <div class="up-cost" style="color:var(--violet)">${owned ? '—' : fmt(a.cost)}</div>
-          <div class="up-qty">${owned ? '' : 'cores'}</div>
+          <span class="up-cost">${owned ? '—' : fmt(a.cost)}</span>
+          <span class="up-qty">${owned ? '' : 'cores'}</span>
         </div>`;
       afrag.appendChild(el);
     }

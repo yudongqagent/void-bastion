@@ -40,6 +40,12 @@ const ENRAGE_AFTER = 100;
 // Where the ship holds station, as a fraction up from the bottom of the field.
 const SHIP_BAND = 0.20;
 
+// More craft on screen, each individually weaker. Wave TOTALS are held constant
+// — count is multiplied and per-enemy hull, payout and ram damage are divided by
+// the same factor — so this is a pure density/readability change that leaves
+// balance.js's tuning, and therefore the whole prestige curve, untouched.
+const SWARM_DENSITY = 2.1;
+
 // How far off straight-up the guns may swing. Wide enough to cover the lane,
 // narrow enough that the ship never looks like it is shooting sideways.
 const AIM_CONE = 0.62;
@@ -93,7 +99,7 @@ const newEnemy = () => ({
   sides: 3, dmg: 0, coin: 0, color: COLORS.drone, type: 'drone', angle: 0, spin: 0,
   shield: 0, maxShield: 0, hitFlash: 0, splits: 0, boss: false, ranged: false,
   fireT: 0, phase: false, phaseT: 0, distScale: 1, stun: 0,
-  behavior: 'dive', t: 0, homeX: 0, amp: 0, freq: 0, holdY: 0,
+  behavior: 'dive', t: 0, homeX: 0, amp: 0, freq: 0, holdY: 0, face: 0,
 });
 
 const newBullet = () => ({
@@ -122,10 +128,10 @@ export class Game {
     this.synth = synth;
     this.renderer = renderer;
 
-    this.enemies = fastPool(newEnemy, 200);
+    this.enemies = fastPool(newEnemy, 320);
     this.bullets = fastPool(newBullet, 500);
     this.particles = fastPool(newParticle, 1800);
-    this.pickups = fastPool(newPickup, 220);
+    this.pickups = fastPool(newPickup, 320);
     this.debris = fastPool(newDebris, 40);
 
     this.floaters = [];
@@ -137,6 +143,10 @@ export class Game {
     this.insetTop = 0; this.insetRight = 0; this.insetBottom = 0;
 
     this.ship = { x: 400, y: 480, vx: 0, vy: 0, radius: 15, bank: 0, thrust: 0 };
+    // Player override. `blend` is 1 while a finger is down and eases back to 0
+    // after release, so control hands back to the autopilot smoothly instead of
+    // the ship snapping out from under you mid-drag.
+    this.manual = { x: 0, y: 0, active: false, blend: 0 };
 
     this.spawnQueue = [];
     this.spawnTimer = 0;
@@ -175,6 +185,18 @@ export class Game {
   }
 
   emit(type, data) { this.events.push({ type, data }); }
+
+  /** Player is steering. Coordinates are in CSS pixels within the canvas. */
+  setManualTarget(x, y, lift = 0) {
+    const m = this.manual;
+    m.active = true;
+    m.x = Math.min(Math.max(x, this.x0 + 16), this.x1 - 16);
+    // Touch lifts the target above the finger so your thumb is not parked on
+    // top of the one thing you are trying to watch.
+    m.y = Math.min(Math.max(y - lift, this.y0 + 30), this.y1 - 18);
+  }
+
+  releaseManual() { this.manual.active = false; }
 
   get stats() {
     if (this._statsDirty) this.recomputeStats();
@@ -257,7 +279,7 @@ export class Game {
         x: this.x0 + Math.random() * this.fieldW,
         y: this.y0 + Math.random() * this.fieldH,
         r: Math.min(this.fieldW, this.fieldH) * (0.4 + Math.random() * 0.5),
-        a: 0.05 + Math.random() * 0.06,
+        a: 0.035 + Math.random() * 0.04,
         depth: 0.14 + Math.random() * 0.12,
       });
     }
@@ -355,11 +377,11 @@ export class Game {
 
     const table = spawnTable(wave);
     const total = table.reduce((a, t) => a + t.weight, 0);
-    const count = enemyCount(wave);
-    const baseHP = enemyHP(wave);
-    const baseDmg = enemyDamage(wave);
+    const count = Math.round(enemyCount(wave) * SWARM_DENSITY);
+    const baseHP = enemyHP(wave) / SWARM_DENSITY;
+    const baseDmg = enemyDamage(wave) / SWARM_DENSITY;
     const baseSpd = enemySpeed(wave);
-    const baseCoin = coinValue(wave);
+    const baseCoin = coinValue(wave) / SWARM_DENSITY;
 
     this.spawnQueue.length = 0;
     for (let i = 0; i < count; i++) {
@@ -391,7 +413,7 @@ export class Game {
 
     // Enemies arrive in formations rather than one at a time — a wall of six
     // sweeping down together reads far better than a trickle.
-    this.formationSize = Math.min(9, 2 + Math.floor(Math.sqrt(wave) / 1.6));
+    this.formationSize = Math.min(12, 3 + Math.floor(Math.sqrt(wave) / 1.3));
     this.spawnInterval = (spawnWindow(wave) / Math.max(1, this.spawnQueue.length)) * this.formationSize;
     this.spawnTimer = 0;
     this.waveActive = true;
@@ -577,13 +599,34 @@ export class Game {
 
     // 5 — station keeping
     ay += (this.shipHomeY - ship.y) * 5.2;
+
+    // --- player override -------------------------------------------------
+    const m = this.manual;
+    m.blend = m.active
+      ? Math.min(1, m.blend + dt * 9)
+      : Math.max(0, m.blend - dt * 2.2);
+    if (m.blend > 0) {
+      const mx = m.x - ship.x, my = m.y - ship.y;
+      const md = Math.hypot(mx, my) || 1;
+      // Arrival damping: full thrust when far, easing to nothing on contact, so
+      // the ship settles under the finger instead of buzzing around it.
+      const approach = Math.min(1, md / 55);
+      const mAx = (mx / md) * approach * 7200;
+      const mAy = (my / md) * approach * 7200;
+      ax = ax * (1 - m.blend) + mAx * m.blend;
+      ay = ay * (1 - m.blend) + mAy * m.blend;
+    }
+
+    // Bounds always apply, override or not — the lane is the lane.
     const edge = 44;
     if (ship.x < this.x0 + edge) ax += (this.x0 + edge - ship.x) * 22;
     if (ship.x > this.x1 - edge) ax -= (ship.x - (this.x1 - edge)) * 22;
     if (ship.y < this.y0 + 60) ay += (this.y0 + 60 - ship.y) * 22;
     if (ship.y > this.y1 - 34) ay -= (ship.y - (this.y1 - 34)) * 22;
 
-    const maxSpeed = 300 * evade;
+    // Under manual control the pilot gets a little extra urgency, so dragging
+    // feels responsive rather than like nudging a barge.
+    const maxSpeed = 300 * evade * (1 + m.blend * 0.5);
     ship.vx += ax * dt;
     ship.vy += ay * dt;
     const drag = Math.pow(0.0016, dt);
@@ -1121,14 +1164,14 @@ export class Game {
           const d = Math.hypot(dx, dy) || 1;
           e.x += (dx / d) * speed * 1.15 * dt;
           e.y += (dy / d) * speed * 1.15 * dt;
-          e.angle = Math.atan2(dy, dx) - Math.PI / 2;
+          e.face = Math.atan2(-dx, dy);
           break;
         }
         case 'weave': {
           e.homeX += (ship.x - e.homeX) * 0.28 * dt;
           e.x = e.homeX + Math.sin(e.t * e.freq * 2.2) * e.amp;
           e.y += speed * dt;
-          e.angle = Math.sin(e.t * e.freq * 2.2) * 0.5;
+          e.face = -Math.cos(e.t * e.freq * 2.2) * 0.45;
           break;
         }
         case 'hover': {
@@ -1152,7 +1195,7 @@ export class Game {
               b.hits.clear();
             }
           }
-          e.angle = Math.PI;
+          e.face = 0;
           break;
         }
         case 'boss': {
@@ -1176,7 +1219,7 @@ export class Game {
               }
             }
           }
-          e.angle = Math.PI;
+          e.face = 0;
           break;
         }
         default: {
@@ -1184,7 +1227,7 @@ export class Game {
           const dx = ship.x - e.x;
           e.x += Math.sign(dx) * Math.min(Math.abs(dx), speed * 0.55) * dt;
           e.y += speed * dt;
-          e.angle = Math.PI + Math.max(-0.5, Math.min(0.5, dx / 260));
+          e.face = -Math.max(-0.45, Math.min(0.45, dx / 300));
           break;
         }
       }
@@ -1425,6 +1468,120 @@ export class Game {
     }
   }
 
+  /**
+   * Draw one enemy as a recognisable top-down craft rather than a bare polygon.
+   *
+   * Everything is composed from the same five SDF primitives, assembled in a
+   * local frame where **+y is the direction the craft is heading** and the unit
+   * is the craft's radius. That local frame is the whole trick: it means each
+   * silhouette is written once as a handful of readable coordinates and works at
+   * any size, any heading, without a single sprite.
+   *
+   * Silhouettes are deliberately distinct in outline, not just colour — at phone
+   * size, on a bloom-heavy background, shape is what the eye actually resolves.
+   */
+  renderCraft(e, r, g, b, alpha) {
+    const R = this.renderer;
+    const s = e.radius;
+    const f = e.face || 0;
+    const cos = Math.cos(f), sin = Math.sin(f);
+    const wx = (lx, ly) => e.x + lx * s * cos - ly * s * sin;
+    const wy = (lx, ly) => e.y + lx * s * sin + ly * s * cos;
+
+    // Local-frame helpers.
+    //
+    // Structure is drawn DIM and cockpits bright. Parts blend additively, so a
+    // craft made of eight overlapping full-brightness pieces sums to white at
+    // the fuselage and every archetype ends up looking identical. Dimming the
+    // hull and letting one hot cockpit sit on top is what makes a silhouette
+    // read as a ship rather than a glowing smear.
+    const HULL = 0.42;
+    const bar = (x1, y1, x2, y2, w, m = 1, a = alpha) =>
+      R.beam(wx(x1, y1), wy(x1, y1), wx(x2, y2), wy(x2, y2), w * s,
+        r * m * HULL, g * m * HULL, b * m * HULL, a * 0.95, 0.42);
+    const dot = (x, y, rad, m = 1, a = alpha) =>
+      R.disc(wx(x, y), wy(x, y), rad * s, r * m, g * m, b * m, a);
+    const gon = (x, y, rad, sides, rot, m = 1, a = alpha) =>
+      R.poly(wx(x, y), wy(x, y), rad * s, sides, f + rot,
+        r * m * HULL, g * m * HULL, b * m * HULL, a);
+
+    switch (e.type) {
+      case 'darter':      // needle interceptor — long, thin, all nose
+        bar(0, -1.1, 0, 1.4, 0.24, 1.1);
+        bar(-0.7, -0.5, 0, -0.1, 0.16, 0.8);
+        bar(0.7, -0.5, 0, -0.1, 0.16, 0.8);
+        dot(0, 0.55, 0.2, 2.2);
+        break;
+
+      case 'brute':       // heavy bomber — wide slab, twin engines
+        gon(0, 0, 0.62, 6, 0, 0.85);
+        bar(-1.5, -0.15, 1.5, -0.15, 0.3, 1.0);
+        bar(-1.1, -0.15, -0.85, -0.85, 0.22, 0.8);
+        bar(1.1, -0.15, 0.85, -0.85, 0.22, 0.8);
+        bar(0, -0.7, 0, 1.0, 0.34, 1.05);
+        dot(0, 0.35, 0.26, 2.0);
+        dot(-0.62, -0.8, 0.16, 1.8);
+        dot(0.62, -0.8, 0.16, 1.8);
+        break;
+
+      case 'splitter':    // twin-hull — visibly two things bolted together
+        bar(-0.5, -0.8, -0.5, 0.9, 0.3, 1.0);
+        bar(0.5, -0.8, 0.5, 0.9, 0.3, 1.0);
+        bar(-0.5, 0.1, 0.5, 0.1, 0.26, 0.8);
+        dot(-0.5, 0.5, 0.2, 1.9);
+        dot(0.5, 0.5, 0.2, 1.9);
+        break;
+
+      case 'shielder':    // saucer — round, no wings, obviously armoured
+        gon(0, 0, 0.78, 8, 0.8);
+        R.ring(e.x, e.y, s * 1.02, s * 0.16, r * 0.7, g * 0.7, b * 0.7, alpha * 0.9);
+        dot(0, 0.1, 0.3, 2.0);
+        break;
+
+      case 'sentinel':    // gunship — side pods and forward barrels
+        bar(0, -0.9, 0, 1.0, 0.42, 1.0);
+        bar(-1.0, -0.3, -1.0, 0.5, 0.26, 0.85);
+        bar(1.0, -0.3, 1.0, 0.5, 0.26, 0.85);
+        bar(-1.0, 0.1, 0, 0.1, 0.2, 0.7);
+        bar(1.0, 0.1, 0, 0.1, 0.2, 0.7);
+        bar(-1.0, 0.5, -1.0, 1.05, 0.12, 1.6);
+        bar(1.0, 0.5, 1.0, 1.05, 0.12, 1.6);
+        dot(0, 0.3, 0.26, 2.1);
+        break;
+
+      case 'wraith':      // stealth delta — one clean swept wing, no fuselage
+        gon(0, 0.1, 0.95, 3, 0, 0.7);
+        bar(-0.95, -0.5, 0.95, -0.5, 0.18, 1.1);
+        dot(0, 0.3, 0.2, 1.9);
+        break;
+
+      case 'boss': {      // battleship — bridge, sponsons, gun batteries
+        gon(0, 0, 0.72, 6, 0, 0.75);
+        bar(0, -1.0, 0, 1.1, 0.55, 0.95);
+        bar(-1.35, -0.35, 1.35, -0.35, 0.34, 0.9);
+        bar(-1.35, -0.35, -1.15, 0.55, 0.3, 0.85);
+        bar(1.35, -0.35, 1.15, 0.55, 0.3, 0.85);
+        bar(-1.15, 0.55, -1.15, 1.0, 0.16, 1.7);
+        bar(1.15, 0.55, 1.15, 1.0, 0.16, 1.7);
+        bar(0, 0.6, 0, 1.25, 0.2, 1.8);
+        dot(0, -0.1, 0.34, 2.2);
+        dot(-0.55, -0.75, 0.2, 1.6);
+        dot(0.55, -0.75, 0.2, 1.6);
+        break;
+      }
+
+      default:            // drone — the workhorse dart
+        bar(0, -0.85, 0, 1.05, 0.3, 1.05);
+        bar(-1.05, -0.45, 0, 0.15, 0.22, 0.85);
+        bar(1.05, -0.45, 0, 0.15, 0.22, 0.85);
+        dot(0, 0.4, 0.24, 2.1);
+        break;
+    }
+
+    // Engine wash trailing behind, so a craft reads as moving even when static.
+    R.glow(wx(0, -1.05), wy(0, -1.05), s * 0.85, r, g, b, 0.3 * alpha, 1.8);
+  }
+
   renderEnemies(time) {
     const R = this.renderer;
     for (const e of this.enemies.items) {
@@ -1445,22 +1602,27 @@ export class Game {
       }
 
       const hpFrac = Math.max(0, e.hp / e.maxHp);
-      R.glow(e.x, e.y, e.radius * 2.7, r, g, b, 0.24 * alpha, 2.1);
-      R.poly(e.x, e.y, e.radius, e.sides, e.angle, r, g, b, alpha);
+      R.glow(e.x, e.y, e.radius * 2.6, r, g, b, 0.2 * alpha, 2.1);
+      this.renderCraft(e, r, g, b, alpha);
 
       if (e.stun > 0) {
         R.ring(e.x, e.y, e.radius + 7 + Math.sin(time * 20) * 2, 1.6, 0.5, 0.9, 1.9, 0.8);
       }
       if (e.shield > 0) {
         const f = e.shield / e.maxShield;
-        R.ring(e.x, e.y, e.radius + 5, 1.4, 0.4, 0.8, 1.6, 0.5 + f * 0.4);
+        R.ring(e.x, e.y, e.radius * 1.5, 1.4, 0.4, 0.8, 1.6, 0.4 + f * 0.4);
       }
       if (e.boss) {
-        R.ring(e.x, e.y, e.radius + 11 + Math.sin(time * 4) * 2, 2.2, 1.6, 0.25, 0.35, 0.85);
-        R.ring(e.x, e.y, e.radius + 18, 3.0, 1.5, 0.4, 0.2, 0.25);
-        R.ring(e.x, e.y, e.radius + 18, 3.0 * hpFrac, 1.6, 0.5, 0.2, 0.9);
+        R.ring(e.x, e.y, e.radius * 1.7 + Math.sin(time * 4) * 2, 2.2, 1.6, 0.25, 0.35, 0.85);
+        R.ring(e.x, e.y, e.radius * 2.0, 3.0, 1.5, 0.4, 0.2, 0.25);
+        R.ring(e.x, e.y, e.radius * 2.0, 3.0 * hpFrac, 1.6, 0.5, 0.2, 0.9);
       } else if (hpFrac < 0.999) {
-        R.ring(e.x, e.y, e.radius + 4.5, 1.1 * hpFrac, r * 1.3, g * 1.3, b * 1.3, 0.55 * alpha);
+        // Health pips sit ahead of the craft so they never hide under the hull.
+        const w = e.radius * 1.1;
+        const by = e.y + e.radius * 1.55;
+        R.beam(e.x - w, by, e.x + w, by, 1.1, 0.35, 0.35, 0.42, 0.3 * alpha, 0.5);
+        R.beam(e.x - w, by, e.x - w + 2 * w * hpFrac, by, 1.1,
+          r * 0.75, g * 0.75, b * 0.75, 0.7 * alpha, 0.5);
       }
     }
   }
@@ -1519,6 +1681,21 @@ export class Game {
       const p = 1 + Math.sin(time * 7) * 0.06;
       R.ring(this.ship.x, this.ship.y, 60 * p, 3.2, 0.35, 1.5, 0.85, 0.75);
       R.glow(this.ship.x, this.ship.y, 90, 0.25, 1.1, 0.6, 0.28, 2);
+    }
+
+    // Where the player is asking the ship to go.
+    const m = this.manual;
+    if (m.blend > 0.02) {
+      const a = m.blend;
+      const pulse = 1 + Math.sin(time * 8) * 0.1;
+      R.ring(m.x, m.y, 17 * pulse, 1.6, 0.4, 1.3, 1.6, 0.75 * a);
+      R.ring(m.x, m.y, 7, 1.4, 0.5, 1.5, 1.7, 0.6 * a);
+      for (let i = 0; i < 4; i++) {
+        const ang = time * 1.6 + (i / 4) * TAU;
+        R.spark(m.x + Math.cos(ang) * 24, m.y + Math.sin(ang) * 24, 5, 2, ang,
+          0.4, 1.3, 1.6, 0.55 * a);
+      }
+      R.glow(m.x, m.y, 34, 0.35, 1.1, 1.5, 0.22 * a, 1.8);
     }
   }
 

@@ -286,7 +286,7 @@ export const TUNING = {
   // handful of hits per wave; a moving ship gets bumped constantly, and at full
   // value nine contacts ended a run. Scaled here rather than in enemyDamage()
   // because sentinel fire and debris still use the unscaled figure.
-  CONTACT_SCALE: 0.60,
+  CONTACT_SCALE: 1.10,
 };
 
 /** Cores awarded for a run that reached `maxWave`. */

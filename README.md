@@ -4,8 +4,9 @@ An infinite sci-fi idle shoot-'em-up for the browser. One ship flying forward
 forever, an endless machine swarm, and an upgrade tree that never stops paying
 out.
 
-You never steer and you never aim. The guns fire themselves, the autopilot
-dodges, hull and shields regenerate. Your only job is deciding what to buy.
+The guns fire themselves, the autopilot dodges, hull and shields regenerate.
+Your job is deciding what to buy — but drag anywhere on the starfield and you
+take the stick, with the autopilot easing back in when you let go.
 
 **Play:** https://yudongqagent.github.io/void-bastion/
 
@@ -47,6 +48,27 @@ It is deliberately imperfect. A pilot that never takes a hit removes all tension
 and makes hull, shields and armour pointless to buy, so the threat radius is
 short and the acceleration finite — it dodges what it can and wears what it
 cannot. Thruster Vanes raises both, so evasion is a real upgrade axis.
+
+Dragging on the play area overrides it. The override is a *blend*, not a switch:
+it ramps to full over ~0.1s and eases back out over ~0.5s after release, so
+control never snaps out from under a drag. Bounds forces apply either way — the
+lane is the lane. Handlers live on the scene canvas rather than the window, so
+the permanent upgrade panel painted over it keeps its own taps.
+
+### Craft silhouettes
+
+Enemies are assembled from the same five SDF primitives in a local frame where
+**+y is the heading** and the unit is the craft's radius, so each silhouette is
+a handful of readable coordinates that works at any size or angle with no
+sprites. Hulls draw *dim* and cockpits bright: parts blend additively, so a
+craft of eight full-brightness pieces sums to white at the fuselage and every
+archetype ends up looking identical. Silhouettes differ in outline, not just
+colour — at phone size on a bloom-heavy background, shape is what the eye
+actually resolves.
+
+Density is a separate knob from difficulty. `SWARM_DENSITY` multiplies the enemy
+count and divides per-enemy hull, payout and ram damage by the same factor, so
+wave totals — and therefore the entire prestige curve — are untouched.
 
 ---
 

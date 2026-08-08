@@ -71,6 +71,39 @@ resize();
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 120));
 
+// --- player control -------------------------------------------------------
+//
+// Drag anywhere on the play area to fly the ship there; release and the
+// autopilot eases back in. Handlers sit on the scene canvas rather than the
+// window so the permanent upgrade panel, which is painted over it, keeps its
+// own taps instead of also flying the ship.
+
+let steering = false;
+
+function playPoint(e) {
+  const r = sceneCanvas.getBoundingClientRect();
+  // Touch aims above the finger; a mouse pointer does not need the clearance.
+  const lift = e.pointerType === 'touch' ? 46 : 0;
+  return { x: e.clientX - r.left, y: e.clientY - r.top, lift };
+}
+
+sceneCanvas.addEventListener('pointerdown', (e) => {
+  if (ui.openModal) return;
+  steering = true;
+  const p = playPoint(e);
+  game.setManualTarget(p.x, p.y, p.lift);
+  try { sceneCanvas.setPointerCapture(e.pointerId); } catch { /* not fatal */ }
+  e.preventDefault();
+});
+sceneCanvas.addEventListener('pointermove', (e) => {
+  if (!steering) return;
+  const p = playPoint(e);
+  game.setManualTarget(p.x, p.y, p.lift);
+});
+for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+  sceneCanvas.addEventListener(ev, () => { steering = false; game.releaseManual(); });
+}
+
 // --- audio unlock --------------------------------------------------------------
 
 function unlockAudio() {

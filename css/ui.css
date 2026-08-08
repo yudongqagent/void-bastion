@@ -51,6 +51,8 @@ html, body {
   height: 100%;
   display: block;
 }
+/* Dragging the ship must not also scroll or zoom the page. */
+#scene { touch-action: none; }
 #overlay { pointer-events: none; }
 
 /* Faint CRT scanlines tie the neon together and hide banding in the bloom. */
@@ -341,13 +343,20 @@ html, body {
 .up-lv.is-max { color: var(--gold); background: rgba(255, 201, 77, 0.15); }
 .up-desc { display: none; font-size: 10px; color: var(--text-dim); }
 .up-val {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
   font-size: 11px;
   color: var(--green);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
+.up-val > span { overflow: hidden; text-overflow: ellipsis; }
+.v-now   { color: var(--text-dim); }
+.v-arrow { color: var(--cyan); opacity: 0.8; flex: none; }
+.v-next  { color: var(--green); font-weight: 700; }
+.up-sub  { font-size: 9px; color: var(--text-dim); }
 
 /* The price doubles as the button face, so affordability is unmistakable. */
 .up-buy {
@@ -390,7 +399,7 @@ html, body {
 .modal-backdrop { position: absolute; inset: 0; background: rgba(2, 4, 10, 0.82); backdrop-filter: blur(6px); }
 .modal {
   position: relative;
-  width: min(460px, calc(100vw - 24px));
+  width: min(480px, calc(100vw - 20px));
   max-height: calc(100vh - 60px);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -433,46 +442,85 @@ html, body {
 }
 .core-banner strong { font-size: 17px; font-variant-numeric: tabular-nums; }
 
-.lab-list { display: flex; flex-direction: column; gap: 5px; }
-/* Lab entries reuse the .up card but sit in a roomy modal, so they keep the
-   original wide-row shape rather than the compact two-up phone card. */
-.lab-list .up {
+.lab-list {
+  /* Same two-up card grid as the upgrade panel. The Lab is the other place the
+     player spends most of their time, so it should not read as a different app. */
   display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
 }
-.lab-list .up-name { display: flex; align-items: center; gap: 6px; white-space: normal; }
-.lab-list .up-desc { display: block; }
-.lab-list .up-val { white-space: normal; }
-/* These have to out-specify `.up.afford .up-buy` (three classes), or lab rows
-   inherit the phone card's filled cyan button and collapse to a ~27px column. */
-.lab-list .up .up-buy,
-.lab-list .up.afford .up-buy,
-.lab-list .up.maxed .up-buy {
+
+/* Lab cards keep the upgrade card's shape and swap cyan for violet, so "this
+   is permanent" is legible at a glance without reading a word. */
+.lab-list .up.lab {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  gap: 3px;
+  padding: 8px 9px 7px;
+  border-radius: 8px;
+}
+.lab-list .up.lab .up-desc { display: none; }
+/* Research names run longer than upgrade names ("Market Analysis" vs "Rail
+   Coil"), so they get a touch less type and a tighter badge to stay unclipped
+   in a half-width card. */
+.lab-list .up.lab .up-name { font-size: 10.5px; letter-spacing: -0.01em; }
+.lab-list .up.lab .up-lv { font-size: 9px; padding: 1px 4px; min-width: 0; }
+.lab-list .up.lab .up-lv {
+  color: var(--violet);
+  background: rgba(176, 107, 255, 0.16);
+}
+.lab-list .up.lab .up-lv.is-max { color: var(--gold); background: rgba(255, 201, 77, 0.15); }
+.lab-list .up.lab .v-arrow { color: var(--violet); }
+
+.lab-list .up.lab .up-buy {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
   justify-content: center;
-  gap: 0;
-  min-width: 56px;
-  margin: 0;
-  padding: 0;
-  background: none;
+  gap: 4px;
+  min-width: 0;
+  margin-top: 2px;
+  padding: 5px 4px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.05);
   box-shadow: none;
-  text-align: right;
 }
-.lab-list .up .up-cost,
-.lab-list .up.afford .up-cost { font-size: 13px; }
-.lab-list .up .up-qty,
-.lab-list .up.afford .up-qty {
-  color: var(--text-dim);
-  font-size: 9px;
-  opacity: 1;
+.lab-list .up.lab .up-cost { font-size: 12px; font-weight: 700; color: #6a5a7a; }
+.lab-list .up.lab .up-qty { font-size: 9px; color: #6a5a7a; opacity: 0.9; }
+
+.lab-list .up.lab.afford { border-color: rgba(176, 107, 255, 0.45); }
+.lab-list .up.lab.afford .up-buy {
+  background: linear-gradient(180deg, #c79cff, #8b4bd8);
+  box-shadow: 0 0 12px rgba(176, 107, 255, 0.35);
 }
-.lab-list .up.afford { background: rgba(176, 107, 255, 0.09); border-color: rgba(176,107,255,0.34); }
-.lab-list .up.afford:active { background: rgba(176, 107, 255, 0.2); }
+.lab-list .up.lab.afford .up-cost,
+.lab-list .up.lab.afford .up-qty { color: #14051f; }
+.lab-list .up.lab.afford:active { transform: scale(0.97); }
+.lab-list .up.lab.poor { opacity: 0.66; }
+.lab-list .up.lab.maxed {
+  opacity: 0.55;
+  border-color: rgba(255, 201, 77, 0.28);
+  cursor: default;
+}
+.lab-list .up.lab.maxed .up-buy { background: rgba(255, 255, 255, 0.03); }
+.lab-list .up.lab.maxed .up-cost { color: var(--gold); }
+/* An owned ability has nothing to buy — the OWNED badge already says so, and an
+   empty button just invites a tap that does nothing. */
+.lab-list .up.ability-card.maxed .up-buy { display: none; }
+
+/* Ability cards carry a glyph and a sentence, so they get the full width. */
+.lab-list .up.ability-card { grid-column: 1 / -1; }
+.lab-list .up.ability-card .up-val {
+  white-space: normal;
+  color: var(--text);
+  font-size: 10.5px;
+}
+.ab-mark {
+  display: inline-block;
+  min-width: 17px;
+  color: var(--violet);
+  font-size: 12px;
+}
 
 .ascend-figure {
   display: flex; align-items: center; justify-content: space-around; gap: 8px;
@@ -594,20 +642,20 @@ kbd {
   /* The right-hand column is only ~330px wide — two cards would be cramped, and
      there is vertical room to spare, so desktop goes back to one wide row each
      with the description shown. */
-  .upgrade-list {
+  #upgradeList {
     grid-template-columns: 1fr;
     padding: 4px 10px 16px;
   }
-  .up {
+  #upgradeList .up {
     display: grid;
     grid-template-columns: 1fr auto;
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
   }
-  .up-desc { display: block; }
-  .up-name { white-space: normal; }
-  .up-buy { min-width: 74px; margin-top: 0; padding: 6px 8px; }
+  #upgradeList .up-desc { display: block; }
+  #upgradeList .up-name { white-space: normal; }
+  #upgradeList .up-buy { min-width: 74px; margin-top: 0; padding: 6px 8px; }
   .stat strong { font-size: 19px; }
   .bar { height: 15px; }
   .bar span { line-height: 15px; font-size: 10px; }
