@@ -1,0 +1,181 @@
+// Headless smoke test for the REAL game loop.
+//
+//   node tools/headless.mjs [--waves 40] [--verbose]
+//
+// tools/simulate.mjs models the balance abstractly; this file is different — it
+// imports js/game/game.js itself and drives Game.update() at a fixed timestep,
+// so it catches the things a balance model cannot: entities that never spawn,
+// waves that never complete, NaN leaking into stats, pools that exhaust, coins
+// that stop accruing. Run it after touching anything in js/game/.
+//
+// Exits non-zero on failure so it can gate a commit.
+
+import { Game } from '../js/game/game.js';
+import { GameState } from '../js/game/state.js';
+import { fmt, UPGRADES, upgradeCost, upgradeMaxLevel } from '../js/game/balance.js';
+
+const args = process.argv.slice(2);
+const argOf = (f, d) => { const i = args.indexOf(f); return i >= 0 ? Number(args[i + 1]) : d; };
+const TARGET_WAVES = argOf('--waves', 40);
+const VERBOSE = args.includes('--verbose');
+const DT = 1 / 60;
+const MAX_SIM_SECONDS = 20000;
+
+// --- stubs ---------------------------------------------------------------------
+
+const store = new Map();
+globalThis.localStorage = {
+  getItem: (k) => (store.has(k) ? store.get(k) : null),
+  setItem: (k, v) => store.set(k, String(v)),
+  removeItem: (k) => store.delete(k),
+};
+
+const silentSynth = new Proxy({}, { get: () => () => {} });
+
+// Records draw calls so we can assert the renderer is actually being fed.
+const stubRenderer = {
+  shake: [0, 0], flash: [0, 0, 0], calls: 0,
+  begin() { this.calls = 0; },
+  push() { this.calls++; },
+  glow() { this.calls++; }, disc() { this.calls++; }, ring() { this.calls++; },
+  poly() { this.calls++; }, beam() { this.calls++; }, spark() { this.calls++; },
+  flush() {},
+};
+
+// --- run ---------------------------------------------------------------------
+
+const state = new GameState();
+const game = new Game(state, silentSynth, stubRenderer);
+game.resize(900, 600);
+
+const failures = [];
+const check = (cond, msg) => { if (!cond) failures.push(msg); };
+
+/**
+ * Buys whichever upgrade gives the most power per coin, where power blends
+ * offence and survivability. Mirrors the policy in tools/simulate.mjs so the
+ * two harnesses agree about what a competent player does.
+ */
+function powerOf() {
+  const s = game.stats;
+  const ehp = (s.maxHull + s.maxShield) / (1 - s.armor);
+  return Math.pow(s.dps, 0.62) * Math.pow(ehp, 0.38) * (1 + s.coinMult * 0.05);
+}
+
+function autoBuy() {
+  let bought = 0;
+  for (;;) {
+    const base = powerOf();
+    let best = null;
+    for (const key of Object.keys(UPGRADES)) {
+      const lvl = state.run.upgrades[key] || 0;
+      if (lvl >= upgradeMaxLevel(key)) continue;
+      const cost = upgradeCost(key, lvl);
+      if (cost > state.run.coins) continue;
+      state.run.upgrades[key] = lvl + 1;
+      game.markStatsDirty();
+      const value = (powerOf() / base - 1) / cost;
+      state.run.upgrades[key] = lvl;
+      game.markStatsDirty();
+      if (!best || value > best.value) best = { key, cost, lvl, value };
+    }
+    if (!best || bought > 400) return bought;
+    state.run.coins -= best.cost;
+    state.run.upgrades[best.key] = best.lvl + 1;
+    game.markStatsDirty();
+    bought++;
+  }
+}
+
+let simTime = 0;
+let lastWave = state.run.wave;
+let waveStartTime = 0;
+const waveDurations = [];
+let peakEnemies = 0, peakBullets = 0, peakParticles = 0;
+let totalBought = 0, revives = 0;
+
+console.log('\n  VOID BASTION — headless loop test');
+console.log(`  driving the real Game.update() at ${Math.round(1 / DT)}Hz\n`);
+if (VERBOSE) console.log('  wave   dur    kills    coins       hull      alive');
+
+while (state.run.wave < TARGET_WAVES && simTime < MAX_SIM_SECONDS && !state.run.over) {
+  game.update(DT);
+  simTime += DT;
+
+  const alive = game.enemies.items.filter((e) => e.active).length;
+  peakEnemies = Math.max(peakEnemies, alive);
+  peakBullets = Math.max(peakBullets, game.bullets.items.filter((b) => b.active).length);
+  peakParticles = Math.max(peakParticles, game.particles.items.filter((p) => p.active).length);
+
+  if (state.run.wave !== lastWave) {
+    const dur = simTime - waveStartTime;
+    waveDurations.push(dur);
+    if (VERBOSE) {
+      console.log(
+        `  ${String(lastWave).padStart(4)}  ${dur.toFixed(1).padStart(5)}s  ` +
+        `${String(state.run.kills).padStart(6)}  ${fmt(state.run.coins).padStart(9)}  ` +
+        `${fmt(Math.max(0, state.run.hull)).padStart(9)}  ${String(alive).padStart(5)}`
+      );
+    }
+    check(dur < 300, `wave ${lastWave} took ${dur.toFixed(0)}s — likely stalled`);
+    totalBought += autoBuy();
+    lastWave = state.run.wave;
+    waveStartTime = simTime;
+  }
+
+  // Keep the bastion standing so the test always reaches the target wave. We are
+  // exercising the machinery here; whether a real player survives is what
+  // tools/simulate.mjs answers.
+  if (state.run.over) { state.run.over = false; revives++; }
+  state.run.hull = game.stats.maxHull;
+}
+
+// --- render pass ---------------------------------------------------------------
+
+game.render(simTime);
+const drawCalls = stubRenderer.calls;
+
+// --- assertions ----------------------------------------------------------------
+
+const s = game.stats;
+check(state.run.wave >= TARGET_WAVES, `only reached wave ${state.run.wave} of ${TARGET_WAVES}`);
+check(state.run.kills > 0, 'no enemies were ever killed');
+check(totalBought > 0, 'no upgrade was ever purchasable');
+check(state.run.coins > 0, 'no coins were ever earned');
+check(peakEnemies > 0, 'no enemy was ever spawned');
+check(peakBullets > 0, 'the bastion never fired');
+check(peakParticles > 0, 'no particles were ever emitted');
+check(drawCalls > 50, `render() only issued ${drawCalls} draw calls`);
+for (const [k, v] of Object.entries(s)) {
+  check(Number.isFinite(v), `stat "${k}" is not finite (${v})`);
+}
+check(Number.isFinite(state.run.coins), 'coins went non-finite');
+check(simTime < MAX_SIM_SECONDS, 'hit the simulated-time ceiling');
+
+const avgWave = waveDurations.reduce((a, b) => a + b, 0) / Math.max(1, waveDurations.length);
+check(avgWave > 2, `average wave lasted only ${avgWave.toFixed(1)}s — waves are not really running`);
+
+// --- report ---------------------------------------------------------------------
+
+console.log(`
+  reached wave ......... ${state.run.wave}
+  sim time ............. ${(simTime / 60).toFixed(1)} min
+  avg wave duration .... ${avgWave.toFixed(1)}s
+  kills ................ ${state.run.kills}
+  coins ................ ${fmt(state.run.coins)}
+  peak alive enemies ... ${peakEnemies}
+  peak bullets ......... ${peakBullets}
+  peak particles ....... ${peakParticles}
+  upgrades bought ...... ${totalBought}
+  revives (deaths) ..... ${revives}
+  pool sizes ........... enemies ${game.enemies.items.length}, bullets ${game.bullets.items.length}, particles ${game.particles.items.length}
+  draw calls / frame ... ${drawCalls}
+`);
+
+if (failures.length) {
+  console.log('  FAILED:');
+  for (const f of failures) console.log('    ✗ ' + f);
+  console.log('');
+  process.exit(1);
+}
+console.log('  ✓ all checks passed\n');

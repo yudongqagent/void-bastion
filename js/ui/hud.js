@@ -1,0 +1,552 @@
+// DOM layer for VOID BASTION.
+//
+// The canvas never draws chrome and this file never touches the simulation
+// beyond reading state and calling buy/use methods. Keeping that line clean is
+// what lets the game run at 60fps while the UI updates at 10Hz — a full DOM
+// refresh every frame would be pure waste, since a cost label changing 60 times
+// a second is invisible.
+
+import {
+  UPGRADES, LAB, ABILITIES, upgradeCost, upgradeBulkCost, affordableLevels,
+  upgradeMaxLevel, labCost, labMult, coresForRun, startingWave,
+  speedOptions, fmt, isBossWave,
+} from '../game/balance.js';
+
+const ABILITY_GLYPH = {
+  overdrive: '▶▶', nova: '◎', aegis: '✦',
+  singularity: '●', lance: '╱',
+};
+
+/** Renders a stat value the way its upgrade wants to be read. */
+function statText(key, stats) {
+  const u = UPGRADES[key];
+  const v = {
+    damage: stats.damage, fireRate: stats.fireRate, critChance: stats.critChance,
+    critMult: stats.critMult, multishot: stats.shots, pierce: stats.pierce,
+    range: stats.range, maxHull: stats.maxHull, regen: stats.regen,
+    shieldMax: stats.maxShield, shieldRegen: stats.shieldRegen, armor: stats.armor,
+    thorns: stats.thorns, coinBonus: stats.coinMult, slowField: stats.slowField,
+    drones: stats.drones, lifesteal: stats.lifesteal,
+  }[key];
+  switch (u.fmt) {
+    case 'pct':      return (v * 100).toFixed(1) + '%';
+    case 'pctBonus': return '×' + v.toFixed(2);
+    case 'mult':     return '×' + v.toFixed(2);
+    case 'rate':     return fmt(v) + '/s';
+    case 'int':      return String(Math.round(v));
+    default:         return fmt(v);
+  }
+}
+
+export class UI {
+  constructor(game, state, synth) {
+    this.game = game;
+    this.state = state;
+    this.synth = synth;
+    this.tab = 'offense';
+    this.qty = 1;
+    this.rows = new Map();       // upgrade key -> {el, cost, lv, val, qty}
+    this.abilityEls = new Map();
+    this.openModal = null;
+    this.lastAffordCount = -1;
+    this.drawerOpen = false;
+
+    this.$ = (id) => document.getElementById(id);
+    this.cache();
+    this.bind();
+    this.buildUpgradeRows();
+    this.buildAbilityBar();
+    // On a wide screen the drawer is a permanent column, so start it open.
+    if (this.isDesktop()) this.setDrawer(true); else this.syncInsets();
+  }
+
+  isDesktop() {
+    return window.matchMedia('(min-width: 860px) and (orientation: landscape)').matches;
+  }
+
+  cache() {
+    for (const id of ['waveNum', 'coinNum', 'coreNum', 'hullFill', 'hullText',
+      'shieldBar', 'shieldFill', 'shieldText', 'bossTag', 'upgradeList', 'drawer',
+      'drawerToggle', 'affordBadge', 'abilities', 'modalRoot', 'toasts',
+      'speedBtn', 'soundBtn', 'labList', 'abilityShop', 'labCores', 'menuStats']) {
+      this[id] = this.$(id);
+    }
+    this.hullBar = this.hullFill.parentElement;
+  }
+
+  bind() {
+    const click = (el, fn) => el && el.addEventListener('click', (e) => {
+      this.synth.click();
+      fn(e);
+    });
+
+    click(this.drawerToggle, () => this.setDrawer(!this.drawerOpen));
+    this.$('drawerGrip').addEventListener('click', () => this.setDrawer(false));
+
+    this.$('tabs').addEventListener('click', (e) => {
+      const b = e.target.closest('.tab');
+      if (!b) return;
+      this.synth.click();
+      this.tab = b.dataset.tab;
+      for (const t of this.$('tabs').children) t.classList.toggle('active', t === b);
+      this.buildUpgradeRows();
+    });
+
+    document.querySelector('.buy-mode').addEventListener('click', (e) => {
+      const b = e.target.closest('.qty');
+      if (!b) return;
+      this.synth.click();
+      this.qty = b.dataset.qty === 'max' ? 'max' : Number(b.dataset.qty);
+      for (const q of b.parentElement.querySelectorAll('.qty')) q.classList.toggle('active', q === b);
+      this.refreshUpgrades(true);
+    });
+
+    this.upgradeList.addEventListener('click', (e) => {
+      const row = e.target.closest('.up');
+      if (row) this.buy(row.dataset.key);
+    });
+
+    click(this.speedBtn, () => this.cycleSpeed());
+    click(this.soundBtn, () => this.toggleSound());
+    click(this.$('menuBtn'), () => this.showModal('modalMenu'));
+
+    this.modalRoot.addEventListener('click', (e) => {
+      if (e.target.closest('[data-close]')) { this.synth.click(); this.hideModal(); }
+    });
+
+    click(this.$('menuLabBtn'), () => this.showModal('modalLab'));
+    click(this.$('menuAscendBtn'), () => this.showAscend());
+    click(this.$('menuHelpBtn'), () => this.showModal('modalHelp'));
+    click(this.$('overLabBtn'), () => this.showModal('modalLab'));
+    click(this.$('wipeBtn'), () => this.confirmWipe());
+
+    this.labList.addEventListener('click', (e) => {
+      const row = e.target.closest('.up');
+      if (row) this.buyLab(row.dataset.key);
+    });
+    this.abilityShop.addEventListener('click', (e) => {
+      const row = e.target.closest('.up');
+      if (row) this.buyAbility(row.dataset.key);
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat || e.metaKey || e.ctrlKey) return;
+      const k = e.key.toLowerCase();
+      if (k >= '1' && k <= '5') {
+        const key = Object.keys(ABILITIES)[Number(k) - 1];
+        if (key) this.game.useAbility(key);
+      } else if (k === 'u') {
+        this.setDrawer(!this.drawerOpen);
+      } else if (k === 'escape') {
+        if (this.openModal) this.hideModal(); else this.setDrawer(false);
+      } else if (k === ' ') {
+        e.preventDefault();
+        this.cycleSpeed();
+      }
+    });
+
+    this._wasDesktop = this.isDesktop();
+    window.addEventListener('resize', () => {
+      const desktop = this.isDesktop();
+      // Only force the drawer when we actually cross the breakpoint. Otherwise
+      // rotating a phone, or the URL bar collapsing, would yank the sheet open
+      // or shut underneath the player mid-tap.
+      if (desktop !== this._wasDesktop) {
+        this._wasDesktop = desktop;
+        this.setDrawer(desktop);
+      } else {
+        this.syncInsets();
+      }
+    });
+  }
+
+  setDrawer(open) {
+    this.drawerOpen = open;
+    this.drawer.classList.toggle('open', open);
+    this.drawerToggle.classList.toggle('open', open);
+    if (open) this.refreshUpgrades(true);
+    this.syncInsets();
+  }
+
+  /** Keep the battlefield centred in the part of the screen the UI isn't using. */
+  syncInsets() {
+    const px = (el) => (el ? el.getBoundingClientRect().height : 0);
+    const top = px(document.getElementById('hud'));
+    if (this.isDesktop()) {
+      this.game.setInsets(top, this.drawer.getBoundingClientRect().width || 330, 0);
+    } else if (this.drawerOpen) {
+      this.game.setInsets(top, 0, this.drawer.getBoundingClientRect().height);
+    } else {
+      // Drawer shut: still keep clear of the ability row and the big UPGRADES button.
+      const bottom = Math.max(px(this.abilities), 0) + px(this.drawerToggle) + 22;
+      this.game.setInsets(top, 0, bottom);
+    }
+  }
+
+  // --- upgrades ---------------------------------------------------------------
+
+  buildUpgradeRows() {
+    this.rows.clear();
+    const frag = document.createDocumentFragment();
+    for (const [key, u] of Object.entries(UPGRADES)) {
+      if (u.tab !== this.tab) continue;
+      const el = document.createElement('div');
+      el.className = 'up';
+      el.dataset.key = key;
+      el.innerHTML = `
+        <div class="up-main">
+          <div class="up-name">${u.name}<span class="up-lv">Lv 0</span></div>
+          <div class="up-desc">${u.desc}</div>
+          <div class="up-val"></div>
+        </div>
+        <div class="up-buy">
+          <div class="up-cost">0</div>
+          <div class="up-qty"></div>
+        </div>`;
+      frag.appendChild(el);
+      this.rows.set(key, {
+        el,
+        lv: el.querySelector('.up-lv'),
+        val: el.querySelector('.up-val'),
+        cost: el.querySelector('.up-cost'),
+        qty: el.querySelector('.up-qty'),
+      });
+    }
+    this.upgradeList.replaceChildren(frag);
+    this.refreshUpgrades(true);
+  }
+
+  /** How many levels a click would buy, and what that costs. */
+  purchasePlan(key) {
+    const { run } = this.state;
+    const lvl = run.upgrades[key] || 0;
+    const max = upgradeMaxLevel(key);
+    if (lvl >= max) return null;
+    let n = this.qty === 'max'
+      ? affordableLevels(key, lvl, run.coins)
+      : Math.min(this.qty, max - lvl);
+    if (this.qty === 'max' && n === 0) n = 1;   // show the next single cost
+    n = Math.max(1, n);
+    return { n, cost: upgradeBulkCost(key, lvl, n), lvl, max };
+  }
+
+  refreshUpgrades(force = false) {
+    if (!this.drawerOpen && !force) return;
+    const { run } = this.state;
+    const stats = this.game.stats;
+    for (const [key, r] of this.rows) {
+      const lvl = run.upgrades[key] || 0;
+      const plan = this.purchasePlan(key);
+      const maxed = plan === null;
+      r.lv.textContent = maxed ? 'MAX' : 'Lv ' + lvl;
+      r.val.textContent = statText(key, stats);
+      if (maxed) {
+        r.cost.textContent = '—';
+        r.qty.textContent = '';
+        r.el.className = 'up maxed';
+      } else {
+        const afford = run.coins >= plan.cost;
+        r.cost.textContent = fmt(plan.cost);
+        r.qty.textContent = plan.n > 1 ? `×${plan.n}` : '';
+        r.el.className = 'up ' + (afford ? 'afford' : 'poor');
+      }
+    }
+  }
+
+  buy(key) {
+    const { run } = this.state;
+    const plan = this.purchasePlan(key);
+    if (!plan) return;
+    if (run.coins < plan.cost) { this.synth.denied(); return; }
+    run.coins -= plan.cost;
+    run.upgrades[key] = plan.lvl + plan.n;
+    this.game.markStatsDirty();
+    this.state.markDirty();
+    this.synth.upgrade();
+
+    // Keep hull/shield proportional so buying max-hull mid-fight is a real heal
+    // rather than a bar that silently gets emptier.
+    const s = this.game.stats;
+    if (key === 'maxHull') run.hull = Math.min(s.maxHull, run.hull + UPGRADES.maxHull.add * plan.n);
+    if (key === 'shieldMax') run.shield = Math.min(s.maxShield, run.shield + UPGRADES.shieldMax.add * plan.n);
+
+    this.refreshUpgrades(true);
+    this.game.addFloater(this.game.cx, this.game.cy + 46,
+      UPGRADES[key].name.toUpperCase(), [0.4, 1.4, 1.6], 0.9);
+  }
+
+  // --- lab --------------------------------------------------------------------
+
+  buildLab() {
+    const { meta } = this.state;
+    this.labCores.textContent = fmt(meta.cores);
+    const frag = document.createDocumentFragment();
+    for (const [key, l] of Object.entries(LAB)) {
+      const lvl = meta.lab[key] || 0;
+      const atMax = l.maxLevel != null && lvl >= l.maxLevel;
+      const cost = labCost(key, lvl);
+      const afford = meta.cores >= cost;
+      const el = document.createElement('div');
+      el.className = 'up ' + (atMax ? 'maxed' : afford ? 'afford' : 'poor');
+      el.dataset.key = key;
+
+      let current, next;
+      if (key === 'labStartWave') {
+        current = 'wave ' + startingWave(lvl);
+        next = 'wave ' + startingWave(lvl + 1);
+      } else if (key === 'labSpeed') {
+        const opts = speedOptions(lvl);
+        current = 'up to ' + opts[opts.length - 1] + '×';
+        next = 'up to ' + speedOptions(lvl + 1).slice(-1)[0] + '×';
+      } else if (key === 'labStartCash') {
+        current = fmt(l.flatBase * (Math.pow(l.mul, lvl) - 1)) + ' coins';
+        next = fmt(l.flatBase * (Math.pow(l.mul, lvl + 1) - 1)) + ' coins';
+      } else {
+        current = '×' + labMult(key, lvl).toFixed(2);
+        next = '×' + labMult(key, lvl + 1).toFixed(2);
+      }
+
+      el.innerHTML = `
+        <div class="up-main">
+          <div class="up-name">${l.name}<span class="up-lv">${atMax ? 'MAX' : 'Lv ' + lvl}</span></div>
+          <div class="up-desc">${l.desc}</div>
+          <div class="up-val">${current}${atMax ? '' : ' → ' + next}</div>
+        </div>
+        <div class="up-buy">
+          <div class="up-cost" style="color:var(--violet)">${atMax ? '—' : fmt(cost)}</div>
+          <div class="up-qty">${atMax ? '' : 'cores'}</div>
+        </div>`;
+      frag.appendChild(el);
+    }
+    this.labList.replaceChildren(frag);
+
+    const afrag = document.createDocumentFragment();
+    for (const [key, a] of Object.entries(ABILITIES)) {
+      const owned = this.state.abilityUnlocked(key);
+      const afford = meta.cores >= a.cost;
+      const el = document.createElement('div');
+      el.className = 'up ' + (owned ? 'maxed' : afford ? 'afford' : 'poor');
+      el.dataset.key = key;
+      el.innerHTML = `
+        <div class="up-main">
+          <div class="up-name">${ABILITY_GLYPH[key]} ${a.name}${owned ? '<span class="up-lv">OWNED</span>' : ''}</div>
+          <div class="up-desc">${a.desc}</div>
+          <div class="up-val">${a.cd}s cooldown</div>
+        </div>
+        <div class="up-buy">
+          <div class="up-cost" style="color:var(--violet)">${owned ? '—' : fmt(a.cost)}</div>
+          <div class="up-qty">${owned ? '' : 'cores'}</div>
+        </div>`;
+      afrag.appendChild(el);
+    }
+    this.abilityShop.replaceChildren(afrag);
+  }
+
+  buyLab(key) {
+    const { meta } = this.state;
+    const lvl = meta.lab[key] || 0;
+    const l = LAB[key];
+    if (l.maxLevel != null && lvl >= l.maxLevel) return;
+    const cost = labCost(key, lvl);
+    if (meta.cores < cost) { this.synth.denied(); return; }
+    meta.cores -= cost;
+    meta.lab[key] = lvl + 1;
+    this.game.markStatsDirty();
+    this.state.save();
+    this.synth.upgrade();
+    this.buildLab();
+    this.toast(`${l.name} → Lv ${lvl + 1}`, 'violet');
+    if (key === 'labSpeed') this.updateSpeedButton();
+  }
+
+  buyAbility(key) {
+    const { meta } = this.state;
+    if (this.state.abilityUnlocked(key)) return;
+    const a = ABILITIES[key];
+    if (meta.cores < a.cost) { this.synth.denied(); return; }
+    meta.cores -= a.cost;
+    meta.abilities[key] = true;
+    this.state.save();
+    this.synth.prestige();
+    this.buildLab();
+    this.buildAbilityBar();
+    this.toast(`${a.name} ONLINE`, 'violet');
+  }
+
+  // --- abilities ---------------------------------------------------------------
+
+  buildAbilityBar() {
+    this.abilityEls.clear();
+    const frag = document.createDocumentFragment();
+    for (const key of Object.keys(ABILITIES)) {
+      if (!this.state.abilityUnlocked(key)) continue;
+      const a = ABILITIES[key];
+      const btn = document.createElement('button');
+      btn.className = 'ability';
+      btn.title = `${a.name} — ${a.desc}`;
+      btn.innerHTML = `
+        <span class="ab-glyph">${ABILITY_GLYPH[key]}</span>
+        <span class="ab-name">${a.name.split(' ')[0].toUpperCase()}</span>
+        <span class="ab-cd" hidden></span>`;
+      btn.addEventListener('click', () => this.game.useAbility(key));
+      frag.appendChild(btn);
+      this.abilityEls.set(key, { btn, cd: btn.querySelector('.ab-cd') });
+    }
+    this.abilities.replaceChildren(frag);
+  }
+
+  refreshAbilities() {
+    const { run } = this.state;
+    for (const [key, el] of this.abilityEls) {
+      const left = run.cooldowns[key] || 0;
+      const active = (this.game.buffs[key] || 0) > 0;
+      if (left > 0) {
+        el.cd.hidden = false;
+        el.cd.textContent = left > 1 ? Math.ceil(left) : left.toFixed(1);
+      } else {
+        el.cd.hidden = true;
+      }
+      el.btn.classList.toggle('ready', left <= 0);
+      el.btn.classList.toggle('active', active);
+    }
+  }
+
+  // --- per-frame-ish refresh -----------------------------------------------------
+
+  refresh() {
+    const { run, meta } = this.state;
+    const s = this.game.stats;
+
+    this.waveNum.textContent = run.wave;
+    this.bossTag.hidden = !isBossWave(run.wave);
+    this.coinNum.textContent = fmt(run.coins);
+    this.coreNum.textContent = fmt(meta.cores);
+
+    const hf = Math.max(0, Math.min(1, run.hull / s.maxHull));
+    this.hullFill.style.transform = `scaleX(${hf})`;
+    this.hullText.textContent = `${fmt(Math.max(0, run.hull))} / ${fmt(s.maxHull)}`;
+    this.hullBar.classList.toggle('low', hf < 0.3);
+
+    if (s.maxShield > 0) {
+      this.shieldBar.hidden = false;
+      this.shieldFill.style.transform = `scaleX(${Math.max(0, Math.min(1, run.shield / s.maxShield))})`;
+      this.shieldText.textContent = `SHIELD ${fmt(Math.max(0, run.shield))} / ${fmt(s.maxShield)}`;
+    } else {
+      this.shieldBar.hidden = true;
+    }
+
+    this.refreshAbilities();
+    this.refreshUpgrades();
+    this.refreshBadge();
+  }
+
+  /** Count of upgrades you can afford right now — the "spend me" nudge. */
+  refreshBadge() {
+    if (this.isDesktop()) return;
+    let n = 0;
+    for (const key of Object.keys(UPGRADES)) {
+      const lvl = this.state.run.upgrades[key] || 0;
+      if (lvl >= upgradeMaxLevel(key)) continue;
+      if (this.state.run.coins >= upgradeCost(key, lvl)) n++;
+    }
+    if (n === this.lastAffordCount) return;
+    this.lastAffordCount = n;
+    this.affordBadge.hidden = n === 0;
+    this.affordBadge.textContent = n;
+  }
+
+  // --- settings ------------------------------------------------------------------
+
+  cycleSpeed() {
+    const opts = speedOptions(this.state.meta.lab.labSpeed);
+    const cur = this.state.meta.settings.speed || 1;
+    const next = opts[(opts.indexOf(cur) + 1) % opts.length] || 1;
+    this.state.meta.settings.speed = next;
+    this.game.timeScale = next;
+    this.state.markDirty();
+    this.updateSpeedButton();
+  }
+
+  updateSpeedButton() {
+    const sp = this.state.meta.settings.speed || 1;
+    this.speedBtn.textContent = sp + '×';
+    this.game.timeScale = sp;
+  }
+
+  toggleSound() {
+    const on = !this.state.meta.settings.sound;
+    this.state.meta.settings.sound = on;
+    this.synth.setEnabled(on);
+    this.soundBtn.classList.toggle('off', !on);
+    this.state.markDirty();
+  }
+
+  // --- modals -----------------------------------------------------------------
+
+  showModal(id) {
+    if (id === 'modalLab') this.buildLab();
+    if (id === 'modalMenu') this.buildMenuStats();
+    this.modalRoot.hidden = false;
+    for (const m of this.modalRoot.querySelectorAll('.modal')) m.hidden = m.id !== id;
+    this.openModal = id;
+    this.game.paused = true;
+  }
+
+  hideModal() {
+    this.modalRoot.hidden = true;
+    this.openModal = null;
+    // A lost run stays paused — the only way out is Rebuild.
+    this.game.paused = this.state.run.over;
+  }
+
+  buildMenuStats() {
+    const { meta, run } = this.state;
+    const rows = [
+      ['CURRENT WAVE', run.wave],
+      ['BEST WAVE', meta.bestWave],
+      ['ASCENSIONS', meta.prestiges],
+      ['TOTAL KILLS', fmt(meta.totalKills)],
+      ['RUNS', meta.totalRuns],
+      ['CORES', fmt(meta.cores)],
+    ];
+    this.menuStats.innerHTML = rows
+      .map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
+  }
+
+  showAscend() {
+    const { run, meta } = this.state;
+    const cores = coresForRun(run.wave, meta.lab.labCoreYield || 0);
+    this.$('ascWave').textContent = run.wave;
+    this.$('ascCores').textContent = fmt(cores);
+    this.$('ascHint').textContent = cores === 0
+      ? 'Reach at least wave 5 before ascending is worth anything.'
+      : `You will restart on wave ${startingWave(meta.lab.labStartWave)} with every Lab bonus intact.`;
+    this.showModal('modalAscend');
+  }
+
+  showRunOver() {
+    const { run, meta } = this.state;
+    const cores = coresForRun(run.wave, meta.lab.labCoreYield || 0);
+    this.$('overWave').textContent = run.wave;
+    this.$('overKills').textContent = fmt(run.kills);
+    this.$('overCores').textContent = fmt(cores);
+    this.$('overHint').textContent = run.wave >= meta.bestWave
+      ? 'A new record. Spend these Cores in the Lab before the next sortie.'
+      : 'Every Core is permanent. Bank them, buy research, push deeper.';
+    this.showModal('modalOver');
+  }
+
+  confirmWipe() {
+    if (!confirm('Erase all progress — Cores, research, records? This cannot be undone.')) return;
+    this.state.reset();
+    location.reload();
+  }
+
+  toast(text, kind = '', big = false) {
+    const el = document.createElement('div');
+    el.className = 'toast ' + kind + (big ? ' big' : '');
+    el.textContent = text;
+    this.toasts.appendChild(el);
+    setTimeout(() => el.remove(), 2600);
+  }
+}

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#04050b">
+<meta name="description" content="VOID BASTION — an infinite sci-fi idle tower defence. Hold the line against an endless machine swarm, upgrade forever, ascend and do it again.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>VOID BASTION</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='30' fill='none' stroke='%234df0ff' stroke-width='8'/><circle cx='50' cy='50' r='11' fill='%234df0ff'/></svg>">
+<link rel="stylesheet" href="css/ui.css">
+</head>
+<body>
+
+<canvas id="scene"></canvas>
+<canvas id="overlay"></canvas>
+<div id="scanlines" aria-hidden="true"></div>
+
+<!-- ── top status ─────────────────────────────────────────────── -->
+<header id="hud">
+  <div class="hud-row">
+    <div class="stat wave">
+      <span class="stat-label">WAVE</span>
+      <strong id="waveNum">1</strong>
+      <span id="bossTag" class="boss-tag" hidden>BOSS</span>
+    </div>
+    <div class="stat coins">
+      <span class="pip pip-coin"></span>
+      <strong id="coinNum">0</strong>
+    </div>
+    <div class="stat cores">
+      <span class="pip pip-core"></span>
+      <strong id="coreNum">0</strong>
+    </div>
+    <button id="speedBtn" class="chip" title="Simulation speed">1&times;</button>
+    <button id="soundBtn" class="chip" title="Sound on/off" aria-label="Toggle sound">&#9835;</button>
+    <button id="menuBtn" class="chip" title="Menu" aria-label="Menu">&#9776;</button>
+  </div>
+  <div class="bars">
+    <div class="bar hull"><i id="hullFill"></i><span id="hullText">220 / 220</span></div>
+    <div class="bar shield" id="shieldBar" hidden><i id="shieldFill"></i><span id="shieldText">0</span></div>
+  </div>
+</header>
+
+<!-- ── abilities ──────────────────────────────────────────────── -->
+<div id="abilities"></div>
+
+<!-- ── upgrade drawer ─────────────────────────────────────────── -->
+<button id="drawerToggle" class="drawer-toggle">
+  <span class="dt-icon">&#9650;</span><span class="dt-label">UPGRADES</span>
+  <span id="affordBadge" class="badge" hidden>0</span>
+</button>
+
+<section id="drawer" class="drawer">
+  <div class="drawer-grip" id="drawerGrip"></div>
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="offense">OFFENSE</button>
+    <button class="tab" data-tab="defense">DEFENSE</button>
+    <button class="tab" data-tab="utility">UTILITY</button>
+  </nav>
+  <div class="buy-mode">
+    <span>BUY</span>
+    <button class="qty active" data-qty="1">&times;1</button>
+    <button class="qty" data-qty="10">&times;10</button>
+    <button class="qty" data-qty="max">MAX</button>
+  </div>
+  <div id="upgradeList" class="upgrade-list"></div>
+</section>
+
+<!-- ── modals ─────────────────────────────────────────────────── -->
+<div id="modalRoot" class="modal-root" hidden>
+  <div class="modal-backdrop" data-close></div>
+
+  <div class="modal" id="modalLab" hidden>
+    <h2>RESEARCH LAB</h2>
+    <p class="modal-sub">Permanent upgrades. Paid for with <b class="c-core">Cores</b>, kept through every ascension.</p>
+    <div class="core-banner">
+      <span class="pip pip-core"></span><strong id="labCores">0</strong> CORES
+    </div>
+    <div id="labList" class="lab-list"></div>
+    <h3 class="lab-heading">ORBITAL ARSENAL</h3>
+    <p class="modal-sub">One-time unlocks. Once bought, usable every run on cooldown.</p>
+    <div id="abilityShop" class="lab-list"></div>
+    <button class="btn ghost" data-close>CLOSE</button>
+  </div>
+
+  <div class="modal" id="modalAscend" hidden>
+    <h2>ASCEND</h2>
+    <p class="modal-sub">
+      End this run and convert its depth into <b class="c-core">Cores</b>.
+      Wave progress and in-run upgrades reset; the Lab does not.
+    </p>
+    <div class="ascend-figure">
+      <div><span>WAVE REACHED</span><strong id="ascWave">0</strong></div>
+      <div class="arrow">&rarr;</div>
+      <div><span>CORES EARNED</span><strong class="c-core" id="ascCores">0</strong></div>
+    </div>
+    <p class="hint" id="ascHint"></p>
+    <div class="modal-actions">
+      <button class="btn primary" id="confirmAscend">ASCEND</button>
+      <button class="btn ghost" data-close>KEEP FIGHTING</button>
+    </div>
+  </div>
+
+  <div class="modal" id="modalOver" hidden>
+    <h2 class="danger">BASTION LOST</h2>
+    <p class="modal-sub">The swarm broke through on wave <b id="overWave">0</b>.</p>
+    <div class="ascend-figure">
+      <div><span>ENEMIES DESTROYED</span><strong id="overKills">0</strong></div>
+      <div class="arrow">&rarr;</div>
+      <div><span>CORES SALVAGED</span><strong class="c-core" id="overCores">0</strong></div>
+    </div>
+    <p class="hint" id="overHint"></p>
+    <div class="modal-actions">
+      <button class="btn primary" id="rebuildBtn">REBUILD</button>
+      <button class="btn ghost" id="overLabBtn">OPEN LAB</button>
+    </div>
+  </div>
+
+  <div class="modal" id="modalMenu" hidden>
+    <h2>SYSTEMS</h2>
+    <div class="menu-stats" id="menuStats"></div>
+    <div class="menu-actions">
+      <button class="btn ghost" id="menuLabBtn">RESEARCH LAB</button>
+      <button class="btn ghost" id="menuAscendBtn">ASCEND</button>
+      <button class="btn ghost" id="menuHelpBtn">HOW TO PLAY</button>
+      <button class="btn danger-ghost" id="wipeBtn">ERASE ALL PROGRESS</button>
+    </div>
+    <button class="btn ghost" data-close>CLOSE</button>
+  </div>
+
+  <div class="modal" id="modalHelp" hidden>
+    <h2>HOW TO PLAY</h2>
+    <ul class="help-list">
+      <li><b>The bastion fires on its own.</b> You never aim. Your job is deciding what to buy.</li>
+      <li><b class="c-coin">Coins</b> drop from kills and wave clears. Spend them in <b>UPGRADES</b> during the run — they vanish when the run ends.</li>
+      <li><b class="c-core">Cores</b> come from ascending. Spend them in the <b>LAB</b> on permanent bonuses that make every future run stronger.</li>
+      <li><b>Runs are meant to end.</b> Enemy health grows exponentially; your run upgrades do not. When you stall, ascend and come back harder.</li>
+      <li><b>Every 10th wave is a boss.</b> Every 25th pays a milestone bonus.</li>
+      <li><b>Abilities</b> unlock in the Lab and sit at the bottom of the screen. Tap them, or press <kbd>1</kbd>–<kbd>5</kbd>.</li>
+      <li><b>It idles.</b> Leave it running and collect, or play actively with abilities and fast buys. Progress saves automatically.</li>
+    </ul>
+    <button class="btn primary" data-close>GOT IT</button>
+  </div>
+</div>
+
+<div id="toasts"></div>
+<div id="bootError" class="boot-error" hidden></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

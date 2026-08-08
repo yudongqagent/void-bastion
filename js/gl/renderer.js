@@ -1,0 +1,458 @@
+// WebGL2 renderer for VOID BASTION.
+//
+// Everything the game draws is one instanced quad evaluated by a signed
+// distance function in the fragment shader — no textures, no image assets, no
+// sprite atlas. That keeps the whole game a few dozen KB, lets shapes stay
+// razor sharp at any DPR, and means the entire frame is a single draw call
+// regardless of how many thousand enemies, bullets and sparks are on screen.
+//
+// Colours are written to an RGBA16F target with values deliberately pushed
+// above 1.0, then a bright-pass + separable gaussian blur + additive composite
+// turns that overshoot into bloom. That HDR overshoot is where the neon look
+// comes from: a colour of 3.5 does not just clamp to white, it *spills*.
+
+export const SHAPE = {
+  GLOW: 0,  // soft radial falloff — particles, muzzle flash, aura
+  DISC: 1,  // crisp filled circle with a glowing rim
+  RING: 2,  // annulus — shields, shockwaves, range indicator
+  POLY: 3,  // regular n-gon — enemies (param.x = sides)
+  BEAM: 4,  // soft-edged rectangle — lasers, tracers
+  SPARK:5,  // elongated glow — debris streaks
+};
+
+const FLOATS_PER_INSTANCE = 12;
+const MAX_INSTANCES = 24000;
+
+const QUAD_VS = `#version 300 es
+layout(location=0) in vec2 a_corner;
+layout(location=1) in vec2 a_pos;
+layout(location=2) in vec2 a_size;
+layout(location=3) in float a_rot;
+layout(location=4) in vec4 a_color;
+layout(location=5) in vec2 a_param;
+layout(location=6) in float a_shape;
+
+uniform vec2 u_res;
+uniform vec2 u_shake;
+
+out vec2 v_local;
+out vec4 v_color;
+out vec2 v_param;
+flat out int v_shape;
+
+void main() {
+  v_local = a_corner;
+  v_color = a_color;
+  v_param = a_param;
+  v_shape = int(a_shape + 0.5);
+
+  float c = cos(a_rot), s = sin(a_rot);
+  vec2 p = a_corner * a_size;
+  p = vec2(p.x * c - p.y * s, p.x * s + p.y * c) + a_pos + u_shake;
+
+  vec2 clip = (p / u_res) * 2.0 - 1.0;
+  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+}`;
+
+const QUAD_FS = `#version 300 es
+precision highp float;
+
+in vec2 v_local;
+in vec4 v_color;
+in vec2 v_param;
+flat in int v_shape;
+out vec4 outColor;
+
+const float TAU = 6.28318530718;
+
+// Regular n-gon with circumradius 1, negative inside.
+float sdPoly(vec2 p, float n) {
+  float an = 3.14159265 / n;
+  float a = atan(p.y, p.x);
+  float k = mod(a + an, 2.0 * an) - an;
+  return length(p) * cos(k) - cos(an);
+}
+
+// Screen-space antialiasing width for a distance field.
+float edge(float d) {
+  float w = max(fwidth(d), 1e-5);
+  return 1.0 - smoothstep(-w, w, d);
+}
+
+void main() {
+  vec2 p = v_local;
+  float r = length(p);
+  float alpha;
+  vec3 rgb = v_color.rgb;
+
+  if (v_shape == 0) {                       // GLOW
+    float falloff = max(v_param.x, 0.35);
+    alpha = pow(max(0.0, 1.0 - r), falloff);
+  } else if (v_shape == 1) {                // DISC
+    float d = r - 1.0;
+    alpha = edge(d);
+    // Rim light: brighten the outer 25% so filled shapes read as emissive.
+    rgb *= 1.0 + 1.9 * smoothstep(0.68, 1.0, r);
+  } else if (v_shape == 2) {                // RING
+    float t = max(v_param.x, 0.01);
+    float d = abs(r - (1.0 - t)) - t;
+    alpha = edge(d);
+    rgb *= 1.25;
+  } else if (v_shape == 3) {                // POLY
+    float sides = max(v_param.x, 3.0);
+    float d = sdPoly(p, sides);
+    alpha = edge(d);
+    // Hollow-core look: bright edge, dimmer middle. Reads as a wireframe hull.
+    float rim = smoothstep(-0.42, -0.02, d);
+    rgb *= 0.42 + 2.1 * rim;
+  } else if (v_shape == 4) {                // BEAM
+    float ax = abs(p.x), ay = abs(p.y);
+    float soft = clamp(v_param.x, 0.02, 1.0);
+    alpha = (1.0 - smoothstep(1.0 - soft, 1.0, ay)) * (1.0 - smoothstep(0.82, 1.0, ax));
+    rgb *= 1.0 + 1.3 * (1.0 - ay);
+  } else {                                  // SPARK
+    float d = length(vec2(p.x, p.y * 2.2));
+    alpha = pow(max(0.0, 1.0 - d), 1.6);
+  }
+
+  alpha *= v_color.a;
+  if (alpha <= 0.002) discard;
+  outColor = vec4(rgb * alpha, alpha);
+}`;
+
+const FULLSCREEN_VS = `#version 300 es
+out vec2 v_uv;
+void main() {
+  // Oversized triangle covering the viewport — no vertex buffer needed.
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  v_uv = p;
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const BRIGHT_FS = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D u_tex;
+uniform float u_threshold;
+out vec4 outColor;
+void main() {
+  vec3 c = texture(u_tex, v_uv).rgb;
+  float l = max(max(c.r, c.g), c.b);
+  outColor = vec4(c * smoothstep(u_threshold, u_threshold + 0.55, l), 1.0);
+}`;
+
+const BLUR_FS = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D u_tex;
+uniform vec2 u_dir;      // texel-sized step, horizontal or vertical
+out vec4 outColor;
+// 9-tap gaussian, weights folded to 5 samples via linear filtering offsets.
+const float O[3] = float[](0.0, 1.3846153846, 3.2307692308);
+const float W[3] = float[](0.2270270270, 0.3162162162, 0.0702702703);
+void main() {
+  vec3 c = texture(u_tex, v_uv).rgb * W[0];
+  for (int i = 1; i < 3; i++) {
+    c += texture(u_tex, v_uv + u_dir * O[i]).rgb * W[i];
+    c += texture(u_tex, v_uv - u_dir * O[i]).rgb * W[i];
+  }
+  outColor = vec4(c, 1.0);
+}`;
+
+const COMPOSITE_FS = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D u_scene;
+uniform sampler2D u_bloom;
+uniform sampler2D u_bloom2;
+uniform float u_intensity;
+uniform vec3 u_flash;
+uniform float u_vignette;
+out vec4 outColor;
+void main() {
+  vec3 scene = texture(u_scene, v_uv).rgb;
+  vec3 bloom = texture(u_bloom, v_uv).rgb + texture(u_bloom2, v_uv).rgb * 0.7;
+  vec3 c = scene + bloom * u_intensity + u_flash;
+
+  // Soft shoulder rather than a hard clamp: highlights roll off to white
+  // instead of banding, which is what keeps the neon from looking flat.
+  c = c / (1.0 + c * 0.42) * 1.42;
+
+  vec2 d = v_uv - 0.5;
+  c *= 1.0 - u_vignette * dot(d, d) * 1.8;
+
+  outColor = vec4(c, 1.0);
+}`;
+
+function compile(gl, type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    throw new Error('shader: ' + gl.getShaderInfoLog(sh) + '\n' + src);
+  }
+  return sh;
+}
+
+function program(gl, vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    throw new Error('link: ' + gl.getProgramInfoLog(p));
+  }
+  return p;
+}
+
+function uniforms(gl, prog) {
+  const out = {};
+  const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) {
+    const name = gl.getActiveUniform(prog, i).name.replace(/\[0\]$/, '');
+    out[name] = gl.getUniformLocation(prog, name);
+  }
+  return out;
+}
+
+export class Renderer {
+  constructor(canvas) {
+    const gl = canvas.getContext('webgl2', {
+      alpha: false, antialias: false, depth: false, stencil: false,
+      powerPreference: 'high-performance', preserveDrawingBuffer: false,
+    });
+    if (!gl) throw new Error('WebGL2 unavailable');
+    this.gl = gl;
+    this.canvas = canvas;
+
+    // Float render targets are what make the bloom HDR. If the extension is
+    // missing we fall back to 8-bit targets: bloom still works, it just cannot
+    // represent overshoot, so the glow is tamer. Better than not running.
+    this.hdr = !!gl.getExtension('EXT_color_buffer_float');
+    gl.getExtension('OES_texture_float_linear');
+
+    this.progQuad = program(gl, QUAD_VS, QUAD_FS);
+    this.progBright = program(gl, FULLSCREEN_VS, BRIGHT_FS);
+    this.progBlur = program(gl, FULLSCREEN_VS, BLUR_FS);
+    this.progComposite = program(gl, FULLSCREEN_VS, COMPOSITE_FS);
+    this.uQuad = uniforms(gl, this.progQuad);
+    this.uBright = uniforms(gl, this.progBright);
+    this.uBlur = uniforms(gl, this.progBlur);
+    this.uComposite = uniforms(gl, this.progComposite);
+
+    this.data = new Float32Array(MAX_INSTANCES * FLOATS_PER_INSTANCE);
+    this.count = 0;
+
+    this._initGeometry();
+    this.emptyVao = gl.createVertexArray();
+
+    this.targets = null;
+    this.width = 0;
+    this.height = 0;
+    this.dpr = 1;
+
+    this.shake = [0, 0];
+    this.flash = [0, 0, 0];
+    this.bloomIntensity = 1.15;
+    this.bloomThreshold = 0.62;
+    this.vignette = 0.55;
+  }
+
+  _initGeometry() {
+    const gl = this.gl;
+    this.vao = gl.createVertexArray();
+    gl.bindVertexArray(this.vao);
+
+    const corners = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+    const cornerBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, cornerBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, corners, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+    this.instanceBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, this.data.byteLength, gl.DYNAMIC_DRAW);
+
+    const stride = FLOATS_PER_INSTANCE * 4;
+    // loc, size, byte offset
+    const attrs = [[1, 2, 0], [2, 2, 8], [3, 1, 16], [4, 4, 20], [5, 2, 36], [6, 1, 44]];
+    for (const [loc, size, offset] of attrs) {
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride, offset);
+      gl.vertexAttribDivisor(loc, 1);
+    }
+    gl.bindVertexArray(null);
+  }
+
+  _makeTarget(w, h) {
+    const gl = this.gl;
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    const internal = this.hdr ? gl.RGBA16F : gl.RGBA8;
+    const type = this.hdr ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+    gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, gl.RGBA, type, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { tex, fbo, w, h };
+  }
+
+  resize(cssWidth, cssHeight, dpr) {
+    const gl = this.gl;
+    const w = Math.max(2, Math.floor(cssWidth * dpr));
+    const h = Math.max(2, Math.floor(cssHeight * dpr));
+    if (w === this.width && h === this.height) return;
+
+    this.width = w; this.height = h; this.dpr = dpr;
+    this.cssWidth = cssWidth; this.cssHeight = cssHeight;
+    this.canvas.width = w;
+    this.canvas.height = h;
+
+    if (this.targets) {
+      for (const t of Object.values(this.targets)) {
+        gl.deleteTexture(t.tex);
+        gl.deleteFramebuffer(t.fbo);
+      }
+    }
+    const hw = Math.max(1, w >> 1), hh = Math.max(1, h >> 1);
+    const qw = Math.max(1, w >> 2), qh = Math.max(1, h >> 2);
+    this.targets = {
+      scene: this._makeTarget(w, h),
+      bright: this._makeTarget(hw, hh),
+      blurA: this._makeTarget(hw, hh),
+      blurB: this._makeTarget(qw, qh),
+      blurC: this._makeTarget(qw, qh),
+    };
+  }
+
+  begin() { this.count = 0; }
+
+  /**
+   * Queue one shape. Colour components may exceed 1.0 — that overshoot is what
+   * drives the bloom, so a "hot" core is just a big number, not a special case.
+   */
+  push(shape, x, y, sx, sy, rot, r, g, b, a, param = 0, param2 = 0) {
+    if (this.count >= MAX_INSTANCES) return;
+    const i = this.count * FLOATS_PER_INSTANCE;
+    const d = this.data;
+    d[i] = x; d[i + 1] = y;
+    d[i + 2] = sx; d[i + 3] = sy;
+    d[i + 4] = rot;
+    d[i + 5] = r; d[i + 6] = g; d[i + 7] = b; d[i + 8] = a;
+    d[i + 9] = param; d[i + 10] = param2;
+    d[i + 11] = shape;
+    this.count++;
+  }
+
+  glow(x, y, radius, r, g, b, a, falloff = 1.6) {
+    this.push(SHAPE.GLOW, x, y, radius, radius, 0, r, g, b, a, falloff);
+  }
+  disc(x, y, radius, r, g, b, a) {
+    this.push(SHAPE.DISC, x, y, radius, radius, 0, r, g, b, a);
+  }
+  ring(x, y, radius, thickness, r, g, b, a) {
+    this.push(SHAPE.RING, x, y, radius, radius, 0, r, g, b, a, Math.min(0.98, thickness / radius));
+  }
+  poly(x, y, radius, sides, rot, r, g, b, a) {
+    this.push(SHAPE.POLY, x, y, radius, radius, rot, r, g, b, a, sides);
+  }
+  /** Beam between two points, `width` thick, with soft edges. */
+  beam(x1, y1, x2, y2, width, r, g, b, a, soft = 0.6) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 0.001;
+    this.push(SHAPE.BEAM, (x1 + x2) / 2, (y1 + y2) / 2, len / 2, width,
+      Math.atan2(dy, dx), r, g, b, a, soft);
+  }
+  spark(x, y, sx, sy, rot, r, g, b, a) {
+    this.push(SHAPE.SPARK, x, y, sx, sy, rot, r, g, b, a);
+  }
+
+  /** Upload the batch, draw the scene, then run the bloom chain. */
+  flush(clearRGB = [0.017, 0.021, 0.043]) {
+    const gl = this.gl;
+    const T = this.targets;
+    if (!T) return;
+
+    // --- scene pass, additive, into the HDR target -------------------------
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.scene.fbo);
+    gl.viewport(0, 0, this.width, this.height);
+    gl.clearColor(clearRGB[0], clearRGB[1], clearRGB[2], 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    if (this.count > 0) {
+      gl.enable(gl.BLEND);
+      // Premultiplied additive: shapes stack into brighter cores where they
+      // overlap, which is exactly the behaviour neon wants.
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.blendEquation(gl.FUNC_ADD);
+
+      gl.useProgram(this.progQuad);
+      gl.uniform2f(this.uQuad.u_res, this.cssWidth, this.cssHeight);
+      gl.uniform2f(this.uQuad.u_shake, this.shake[0], this.shake[1]);
+
+      gl.bindVertexArray(this.vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0,
+        this.data.subarray(0, this.count * FLOATS_PER_INSTANCE));
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.count);
+      gl.bindVertexArray(null);
+      gl.disable(gl.BLEND);
+    }
+
+    // --- bloom chain --------------------------------------------------------
+    gl.bindVertexArray(this.emptyVao);
+
+    const pass = (target, prog, setup) => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fbo : null);
+      gl.viewport(0, 0, target ? target.w : this.width, target ? target.h : this.height);
+      gl.useProgram(prog);
+      setup();
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    };
+    const bind = (unit, tex, loc) => {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.uniform1i(loc, unit);
+    };
+
+    pass(T.bright, this.progBright, () => {
+      bind(0, T.scene.tex, this.uBright.u_tex);
+      gl.uniform1f(this.uBright.u_threshold, this.bloomThreshold);
+    });
+
+    // Half-res blur, then a quarter-res blur for a wider, softer halo.
+    pass(T.blurA, this.progBlur, () => {
+      bind(0, T.bright.tex, this.uBlur.u_tex);
+      gl.uniform2f(this.uBlur.u_dir, 1 / T.bright.w, 0);
+    });
+    pass(T.bright, this.progBlur, () => {
+      bind(0, T.blurA.tex, this.uBlur.u_tex);
+      gl.uniform2f(this.uBlur.u_dir, 0, 1 / T.blurA.h);
+    });
+    pass(T.blurB, this.progBlur, () => {
+      bind(0, T.bright.tex, this.uBlur.u_tex);
+      gl.uniform2f(this.uBlur.u_dir, 1.6 / T.bright.w, 0);
+    });
+    pass(T.blurC, this.progBlur, () => {
+      bind(0, T.blurB.tex, this.uBlur.u_tex);
+      gl.uniform2f(this.uBlur.u_dir, 0, 1.6 / T.blurB.h);
+    });
+
+    pass(null, this.progComposite, () => {
+      bind(0, T.scene.tex, this.uComposite.u_scene);
+      bind(1, T.bright.tex, this.uComposite.u_bloom);
+      bind(2, T.blurC.tex, this.uComposite.u_bloom2);
+      gl.uniform1f(this.uComposite.u_intensity, this.bloomIntensity);
+      gl.uniform3f(this.uComposite.u_flash, this.flash[0], this.flash[1], this.flash[2]);
+      gl.uniform1f(this.uComposite.u_vignette, this.vignette);
+    });
+
+    gl.bindVertexArray(null);
+  }
+}
