@@ -93,7 +93,7 @@ function simulateWave(wave, up, lab, prestige, state) {
   const totalWeight = table.reduce((a, t) => a + t.weight, 0);
   const count = enemyCount(wave);
   const baseHP = enemyHP(wave);
-  const baseSpeed = enemySpeed(wave) * (1 - stats.slowField);
+  const baseSpeed = enemySpeed(wave);
   const baseDmg = enemyDamage(wave);
 
   const queue = [];
@@ -111,7 +111,7 @@ function simulateWave(wave, up, lab, prestige, state) {
   }
   if (isBossWave(wave)) {
     const b = bossStats(wave);
-    queue.push({ hp: b.hp, speed: b.speed * (1 - stats.slowField), dmg: b.damage, coin: b.coins, splits: 0, boss: true });
+    queue.push({ hp: b.hp, speed: b.speed, dmg: b.damage, coin: b.coins, splits: 0, boss: true });
   }
 
   // Spawns are spread across a fixed window rather than a fixed per-enemy gap.

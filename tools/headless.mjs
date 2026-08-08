@@ -18,6 +18,10 @@ const args = process.argv.slice(2);
 const argOf = (f, d) => { const i = args.indexOf(f); return i >= 0 ? Number(args[i + 1]) : d; };
 const TARGET_WAVES = argOf('--waves', 40);
 const VERBOSE = args.includes('--verbose');
+// --natural disables the keep-alive so we can measure how deep a competent
+// player actually gets. The autopilot dodges, so survivability is now an
+// emergent property of the steering code and cannot be assumed from balance.js.
+const NATURAL = args.includes('--natural');
 const DT = 1 / 60;
 const MAX_SIM_SECONDS = 20000;
 
@@ -46,7 +50,7 @@ const stubRenderer = {
 
 const state = new GameState();
 const game = new Game(state, silentSynth, stubRenderer);
-game.resize(900, 600);
+game.resize(420, 780);   // phone-ish portrait, the primary target
 
 const failures = [];
 const check = (cond, msg) => { if (!cond) failures.push(msg); };
@@ -91,8 +95,9 @@ let simTime = 0;
 let lastWave = state.run.wave;
 let waveStartTime = 0;
 const waveDurations = [];
-let peakEnemies = 0, peakBullets = 0, peakParticles = 0;
+let peakEnemies = 0, peakBullets = 0, peakParticles = 0, peakPickups = 0;
 let totalBought = 0, revives = 0;
+let collected = 0, lastCoins = state.run.coins;
 
 console.log('\n  VOID BASTION — headless loop test');
 console.log(`  driving the real Game.update() at ${Math.round(1 / DT)}Hz\n`);
@@ -102,10 +107,14 @@ while (state.run.wave < TARGET_WAVES && simTime < MAX_SIM_SECONDS && !state.run.
   game.update(DT);
   simTime += DT;
 
+  if (state.run.coins > lastCoins) collected += state.run.coins - lastCoins;
+  lastCoins = state.run.coins;
+
   const alive = game.enemies.items.filter((e) => e.active).length;
   peakEnemies = Math.max(peakEnemies, alive);
   peakBullets = Math.max(peakBullets, game.bullets.items.filter((b) => b.active).length);
   peakParticles = Math.max(peakParticles, game.particles.items.filter((p) => p.active).length);
+  peakPickups = Math.max(peakPickups, game.pickups.items.filter((p) => p.active).length);
 
   if (state.run.wave !== lastWave) {
     const dur = simTime - waveStartTime;
@@ -126,8 +135,11 @@ while (state.run.wave < TARGET_WAVES && simTime < MAX_SIM_SECONDS && !state.run.
   // Keep the bastion standing so the test always reaches the target wave. We are
   // exercising the machinery here; whether a real player survives is what
   // tools/simulate.mjs answers.
-  if (state.run.over) { state.run.over = false; revives++; }
-  state.run.hull = game.stats.maxHull;
+  if (!NATURAL) {
+    if (state.run.over) { state.run.over = false; revives++; }
+    state.run.hull = game.stats.maxHull;
+    lastCoins = state.run.coins;
+  }
 }
 
 // --- render pass ---------------------------------------------------------------
@@ -138,13 +150,15 @@ const drawCalls = stubRenderer.calls;
 // --- assertions ----------------------------------------------------------------
 
 const s = game.stats;
-check(state.run.wave >= TARGET_WAVES, `only reached wave ${state.run.wave} of ${TARGET_WAVES}`);
+if (!NATURAL) check(state.run.wave >= TARGET_WAVES, `only reached wave ${state.run.wave} of ${TARGET_WAVES}`);
 check(state.run.kills > 0, 'no enemies were ever killed');
 check(totalBought > 0, 'no upgrade was ever purchasable');
 check(state.run.coins > 0, 'no coins were ever earned');
 check(peakEnemies > 0, 'no enemy was ever spawned');
 check(peakBullets > 0, 'the bastion never fired');
 check(peakParticles > 0, 'no particles were ever emitted');
+check(peakPickups > 0, 'kills never dropped any loot');
+check(collected > 0, 'the ship never collected a single pickup');
 check(drawCalls > 50, `render() only issued ${drawCalls} draw calls`);
 for (const [k, v] of Object.entries(s)) {
   check(Number.isFinite(v), `stat "${k}" is not finite (${v})`);
@@ -166,8 +180,10 @@ console.log(`
   peak alive enemies ... ${peakEnemies}
   peak bullets ......... ${peakBullets}
   peak particles ....... ${peakParticles}
+  peak pickups ......... ${peakPickups}
+  coins collected ...... ${fmt(collected)}
   upgrades bought ...... ${totalBought}
-  revives (deaths) ..... ${revives}
+  revives (deaths) ..... ${revives}${NATURAL ? '  (natural mode: died for real)' : ''}
   pool sizes ........... enemies ${game.enemies.items.length}, bullets ${game.bullets.items.length}, particles ${game.particles.items.length}
   draw calls / frame ... ${drawCalls}
 `);

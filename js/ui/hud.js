@@ -25,8 +25,8 @@ function statText(key, stats) {
     critMult: stats.critMult, multishot: stats.shots, pierce: stats.pierce,
     range: stats.range, maxHull: stats.maxHull, regen: stats.regen,
     shieldMax: stats.maxShield, shieldRegen: stats.shieldRegen, armor: stats.armor,
-    thorns: stats.thorns, coinBonus: stats.coinMult, slowField: stats.slowField,
-    drones: stats.drones, lifesteal: stats.lifesteal,
+    thorns: stats.thorns, coinBonus: stats.coinMult, magnet: stats.magnet,
+    evasion: stats.evasion, drones: stats.drones, lifesteal: stats.lifesteal,
   }[key];
   switch (u.fmt) {
     case 'pct':      return (v * 100).toFixed(1) + '%';
@@ -65,7 +65,8 @@ export class UI {
     for (const id of ['waveNum', 'coinNum', 'coreNum', 'hullFill', 'hullText',
       'shieldBar', 'shieldFill', 'shieldText', 'bossTag', 'upgradeList', 'drawer',
       'abilities', 'modalRoot', 'toasts',
-      'speedBtn', 'soundBtn', 'labList', 'abilityShop', 'labCores', 'menuStats']) {
+      'speedBtn', 'soundBtn', 'labList', 'abilityShop', 'labCores', 'menuStats',
+      'zoneName']) {
       this[id] = this.$(id);
     }
     this.hullBar = this.hullFill.parentElement;
@@ -420,6 +421,11 @@ export class UI {
     this.refreshUpgrades();
   }
 
+
+  /** Name of the zone the ship is flying through, shown next to the wave. */
+  setZone(sector) {
+    if (this.zoneName) this.zoneName.textContent = sector.name;
+  }
 
   // --- settings ------------------------------------------------------------------
 

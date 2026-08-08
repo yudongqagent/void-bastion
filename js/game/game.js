@@ -1,27 +1,48 @@
 // VOID BASTION — simulation.
 //
-// Owns the world: the bastion, the swarm, projectiles, particles, abilities and
-// wave flow. Knows nothing about the DOM chrome around it; it emits events and
-// main.js decides what the UI does with them.
+// A vertically scrolling auto-shmup. The ship flies forward forever near the
+// bottom of the screen while the world streams down past it; the swarm enters
+// from the top and mostly kills itself against your guns trying to ram you.
+//
+// The player never steers and never aims. Guns fire themselves, the autopilot
+// dodges, hull and shields regenerate. The whole point is that it is enjoyable
+// to WATCH — so the interesting code here is the steering behaviour, not input
+// handling, of which there is none.
+//
+// Threat model note for anyone touching the balance: contact damage is still
+// the primary way you lose hull, exactly as in the old static-tower build, so
+// every formula in balance.js carries over unchanged. What the autopilot adds
+// is a variable damage-avoidance factor, which is why tools/headless.mjs
+// measures survivability rather than assuming it.
 //
 // Every entity type is pooled. At wave 400 there can be 150 enemies, several
 // hundred projectiles and a couple of thousand particles alive at once, and
 // allocating those per frame would hand the GC a stutter every few seconds.
-// Pools mean the steady-state allocation rate is essentially zero.
 
 import {
   enemyHP, enemyCount, enemySpeed, enemyDamage, coinValue, waveClearBonus,
   spawnWindow, isBossWave, bossStats, spawnTable, ABILITIES, deriveStats,
+  BOSS_INTERVAL, TUNING,
 } from './balance.js';
+import { sectorForWave, sectorNumber, isSectorStart } from './sectors.js';
 
 const TAU = Math.PI * 2;
 
-// The approach length tools/simulate.mjs assumes when it balances waves.
-// Enemy speeds are rescaled to this so pacing is viewport-independent.
+// How far an enemy travels from entry to the ship in the reference layout that
+// tools/simulate.mjs balances against. Real screens differ, so enemy speeds are
+// rescaled to keep time-to-contact — the thing that actually decides whether a
+// wave hurts you — the same everywhere.
 const REFERENCE_APPROACH = 430;
 
 // Seconds a single wave may run before the survivors start enraging.
 const ENRAGE_AFTER = 100;
+
+// Where the ship holds station, as a fraction up from the bottom of the field.
+const SHIP_BAND = 0.20;
+
+// How far off straight-up the guns may swing. Wide enough to cover the lane,
+// narrow enough that the ship never looks like it is shooting sideways.
+const AIM_CONE = 0.62;
 
 // Palette. Values above 1.0 are intentional: the renderer's HDR target turns
 // that overshoot into bloom, so "hot" is literally a bigger number.
@@ -34,65 +55,65 @@ const COLORS = {
   sentinel: [1.55, 0.52, 0.20],
   wraith:   [0.92, 0.72, 1.55],
   boss:     [1.60, 0.18, 0.30],
-  tower:    [0.30, 1.05, 1.35],
+  ship:     [0.30, 1.05, 1.35],
   bullet:   [0.55, 1.30, 1.60],
   shield:   [0.35, 0.85, 1.50],
   coin:     [1.50, 1.15, 0.35],
+  repair:   [0.30, 1.45, 0.70],
+  debris:   [0.42, 0.40, 0.46],
 };
 
-function pool(factory, initial) {
+function fastPool(factory, initial) {
   const items = [];
   for (let i = 0; i < initial; i++) items.push(factory());
   return {
     items,
+    cursor: 0,
+    // Monotonic cursor makes acquisition O(1) amortised rather than an O(n)
+    // scan, which matters once a pool holds thousands of particles.
     obtain() {
-      for (let i = 0; i < this.items.length; i++) {
-        if (!this.items[i].active) return this.items[i];
+      const n = this.items.length;
+      for (let i = 0; i < n; i++) {
+        const idx = (this.cursor + i) % n;
+        if (!this.items[idx].active) {
+          this.cursor = (idx + 1) % n;
+          return this.items[idx];
+        }
       }
-      const n = factory();
-      this.items.push(n);
-      return n;
+      const fresh = factory();
+      this.items.push(fresh);
+      this.cursor = 0;
+      return fresh;
     },
   };
-}
-
-// A monotonically advancing cursor makes pool acquisition O(1) amortised
-// instead of O(n) scanning, which matters once pools hold thousands of items.
-function fastPool(factory, initial) {
-  const p = pool(factory, initial);
-  p.cursor = 0;
-  p.obtain = function () {
-    const n = this.items.length;
-    for (let i = 0; i < n; i++) {
-      const idx = (this.cursor + i) % n;
-      if (!this.items[idx].active) {
-        this.cursor = (idx + 1) % n;
-        return this.items[idx];
-      }
-    }
-    const fresh = factory();
-    this.items.push(fresh);
-    this.cursor = 0;
-    return fresh;
-  };
-  return p;
 }
 
 const newEnemy = () => ({
   active: false, x: 0, y: 0, vx: 0, vy: 0, hp: 0, maxHp: 0, speed: 0, radius: 10,
   sides: 3, dmg: 0, coin: 0, color: COLORS.drone, type: 'drone', angle: 0, spin: 0,
-  shield: 0, maxShield: 0, slowT: 0, hitFlash: 0, splits: 0, boss: false,
-  ranged: false, fireT: 0, phase: false, phaseT: 0, held: 0, distScale: 1,
+  shield: 0, maxShield: 0, hitFlash: 0, splits: 0, boss: false, ranged: false,
+  fireT: 0, phase: false, phaseT: 0, distScale: 1, stun: 0,
+  behavior: 'dive', t: 0, homeX: 0, amp: 0, freq: 0, holdY: 0,
 });
 
 const newBullet = () => ({
   active: false, x: 0, y: 0, vx: 0, vy: 0, dmg: 0, pierce: 1, life: 0,
-  crit: false, radius: 3, hits: null, fromEnemy: false, color: COLORS.bullet,
+  crit: false, radius: 3, hits: null, fromEnemy: false,
 });
 
 const newParticle = () => ({
   active: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, maxLife: 1, size: 3,
   r: 1, g: 1, b: 1, drag: 0.94, kind: 0, rot: 0,
+});
+
+const newPickup = () => ({
+  active: false, x: 0, y: 0, vx: 0, vy: 0, kind: 'coin', value: 0,
+  life: 0, spin: 0, angle: 0, drawn: false,
+});
+
+const newDebris = () => ({
+  active: false, x: 0, y: 0, vy: 0, r: 0, angle: 0, spin: 0, sides: 6,
+  hp: 0, maxHp: 0, flash: 0,
 });
 
 export class Game {
@@ -102,19 +123,20 @@ export class Game {
     this.renderer = renderer;
 
     this.enemies = fastPool(newEnemy, 200);
-    this.bullets = fastPool(newBullet, 400);
-    this.particles = fastPool(newParticle, 1600);
+    this.bullets = fastPool(newBullet, 500);
+    this.particles = fastPool(newParticle, 1800);
+    this.pickups = fastPool(newPickup, 220);
+    this.debris = fastPool(newDebris, 40);
 
-    this.floaters = [];      // damage / coin text, drawn on the 2D overlay
-    this.events = [];        // consumed by main.js each frame
+    this.floaters = [];
+    this.events = [];
 
-    // Seeded with a usable field, not zeros: resize() can legitimately never
-    // fire (a tab that is never laid out), and an unsized world puts the spawn
-    // ring on top of the bastion — or at NaN — instead of around it.
+    // Seeded with a usable field: resize() can legitimately never fire (a tab
+    // that is never laid out), and a zero-sized world puts the ship at NaN.
     this.w = 800; this.h = 600;
-    this.cx = 400; this.cy = 300;
-    this.spawnRX = 448; this.spawnRY = 348;
     this.insetTop = 0; this.insetRight = 0; this.insetBottom = 0;
+
+    this.ship = { x: 400, y: 480, vx: 0, vy: 0, radius: 15, bank: 0, thrust: 0 };
 
     this.spawnQueue = [];
     this.spawnTimer = 0;
@@ -124,8 +146,12 @@ export class Game {
     this.waveTime = 0;
     this.enrage = 0;
     this.fireTimer = 0;
-    this.turretAngle = -Math.PI / 2;
-    this.droneAngle = 0;
+    this.wingAngle = 0;
+
+    this.scroll = 0;
+    this.scrollSpeed = 150;
+    this.layers = [];
+    this.nebulae = [];
 
     this.shakeAmount = 0;
     this.flashAmount = 0;
@@ -133,14 +159,18 @@ export class Game {
     this.timeScale = 1;
     this.paused = false;
 
-    this.buffs = {};          // ability key -> seconds remaining
+    this.buffs = {};
     this.singularity = null;
     this.lance = null;
+    this.storm = null;
+    this.stormTimer = 5;
 
-    this.stars = [];
+    this.sector = sectorForWave(1, BOSS_INTERVAL);
     this._statsDirty = true;
     this._stats = null;
 
+    this.applyLayout();
+    this.buildBackdrop();
     this.recomputeStats();
   }
 
@@ -159,17 +189,18 @@ export class Game {
 
   markStatsDirty() { this._statsDirty = true; }
 
+  // --- layout ---------------------------------------------------------------
+
   resize(w, h) {
     this.w = w; this.h = h;
     this.applyLayout();
-    this.buildStars();
+    this.buildBackdrop();
   }
 
   /**
-   * Tell the world how much of the viewport the UI is covering, so the bastion
-   * stays centred in what the player can actually SEE. Without this, opening
-   * the upgrade sheet on a phone parks it directly on top of the tower and you
-   * shop blind — the one moment you most want to watch the fight.
+   * Tell the world how much of the viewport the UI is covering, so the flight
+   * lane sits in what the player can actually SEE. Without this the permanent
+   * upgrade panel would cover the ship — the one thing you most want to watch.
    */
   setInsets(top, right, bottom) {
     this.insetTop = top;
@@ -179,33 +210,133 @@ export class Game {
   }
 
   applyLayout() {
-    const top = this.insetTop || 0;
-    const vw = Math.max(220, this.w - (this.insetRight || 0));
-    const vh = Math.max(220, this.h - top - (this.insetBottom || 0));
-    this.cx = vw / 2;
-    this.cy = top + vh / 2;
-    // Enemies enter on an ELLIPSE hugging the visible field, not a circle around
-    // the diagonal. A circle big enough to clear the corners of a wide desktop
-    // window sits ~900px out, and at the deliberately low speeds this game uses
-    // that is a 35-second stroll before anything reaches the bastion. The
-    // ellipse keeps every approach about one screen-half long on any shape of
-    // screen, so pacing feels the same on a phone and on a monitor.
-    this.spawnRX = vw / 2 + 48;
-    this.spawnRY = vh / 2 + 48;
+    this.x0 = 0;
+    this.x1 = Math.max(200, this.w - (this.insetRight || 0));
+    this.y0 = this.insetTop || 0;
+    this.y1 = Math.max(this.y0 + 200, this.h - (this.insetBottom || 0));
+    this.fieldW = this.x1 - this.x0;
+    this.fieldH = this.y1 - this.y0;
+    this.cx = (this.x0 + this.x1) / 2;
+    this.cy = (this.y0 + this.y1) / 2;
+    this.shipHomeY = this.y1 - this.fieldH * SHIP_BAND;
+    // Distance an entering enemy covers before it reaches the ship's band.
+    this.approach = Math.max(160, this.shipHomeY - this.y0 + 60);
+    if (!this.ship.placed) {
+      this.ship.x = this.cx;
+      this.ship.y = this.shipHomeY;
+      this.ship.placed = true;
+    }
+    this.ship.x = Math.min(Math.max(this.ship.x, this.x0 + 30), this.x1 - 30);
+    this.ship.y = Math.min(Math.max(this.ship.y, this.y0 + 40), this.y1 - 30);
   }
 
-  buildStars() {
-    this.stars.length = 0;
-    const n = Math.round((this.w * this.h) / 5200);
-    for (let i = 0; i < n; i++) {
-      this.stars.push({
-        x: Math.random() * this.w,
-        y: Math.random() * this.h,
-        r: 0.4 + Math.random() * 1.5,
-        a: 0.15 + Math.random() * 0.55,
-        tw: Math.random() * TAU,
-        sp: 0.4 + Math.random() * 1.4,
+  // --- backdrop -------------------------------------------------------------
+
+  buildBackdrop() {
+    // Three parallax star layers. Depth drives both speed and brightness, which
+    // is what sells "flying forward" with nothing but dots.
+    this.layers = [];
+    const density = (this.fieldW * this.fieldH) / 9000;
+    for (const [depth, size, alpha] of [[0.35, 1.0, 0.34], [0.68, 1.5, 0.55], [1.15, 2.3, 0.85]]) {
+      const stars = [];
+      const n = Math.max(12, Math.round(density * depth));
+      for (let i = 0; i < n; i++) {
+        stars.push({
+          x: this.x0 + Math.random() * this.fieldW,
+          y: this.y0 + Math.random() * this.fieldH,
+          r: size * (0.5 + Math.random() * 0.9),
+          a: alpha * (0.4 + Math.random() * 0.6),
+        });
+      }
+      this.layers.push({ depth, stars });
+    }
+
+    this.nebulae.length = 0;
+    for (let i = 0; i < 4; i++) {
+      this.nebulae.push({
+        x: this.x0 + Math.random() * this.fieldW,
+        y: this.y0 + Math.random() * this.fieldH,
+        r: Math.min(this.fieldW, this.fieldH) * (0.4 + Math.random() * 0.5),
+        a: 0.05 + Math.random() * 0.06,
+        depth: 0.14 + Math.random() * 0.12,
       });
+    }
+  }
+
+  updateBackdrop(dt) {
+    const sec = this.sector;
+    const base = this.scrollSpeed * (sec.scrollMult || 1);
+    this.scroll += base * dt;
+
+    for (const layer of this.layers) {
+      const v = base * layer.depth;
+      for (const s of layer.stars) {
+        s.y += v * dt;
+        if (s.y > this.y1 + 4) {
+          s.y = this.y0 - 4;
+          s.x = this.x0 + Math.random() * this.fieldW;
+        }
+      }
+    }
+    for (const n of this.nebulae) {
+      n.y += base * n.depth * dt;
+      if (n.y - n.r > this.y1) {
+        n.y = this.y0 - n.r;
+        n.x = this.x0 + Math.random() * this.fieldW;
+      }
+    }
+  }
+
+  // --- zones ----------------------------------------------------------------
+
+  enterSector(wave) {
+    const next = sectorForWave(wave, BOSS_INTERVAL);
+    const changed = next.id !== this.sector.id;
+    this.sector = next;
+    this.storm = null;
+    this.stormTimer = 3 + Math.random() * 4;
+    if (changed || wave <= 1) {
+      this.emit('sector', { sector: next, index: sectorNumber(wave, BOSS_INTERVAL) + 1 });
+      this.flash(next.haze.map((c) => c * 0.22), 0.55);
+    }
+  }
+
+  spawnDebris() {
+    const d = this.debris.obtain();
+    d.active = true;
+    d.r = 16 + Math.random() * 34;
+    // Shootable. A rock you can break is an opportunity; one you can only be
+    // hit by is a tax on idling — and the Asteroid Belt was ending runs at
+    // wave 15 before this, which is exactly the hard-counter we ruled out.
+    d.maxHp = enemyHP(this.state.run.wave) * 1.6;
+    d.hp = d.maxHp;
+    d.flash = 0;
+    d.x = this.x0 + d.r + Math.random() * (this.fieldW - d.r * 2);
+    d.y = this.y0 - d.r - 20;
+    d.vy = (0.55 + Math.random() * 0.4);   // multiplier on scroll speed
+    d.angle = Math.random() * TAU;
+    d.spin = (Math.random() - 0.5) * 0.8;
+    d.sides = 5 + ((Math.random() * 3) | 0);
+  }
+
+  /** Shatter a rock, scattering ore worth collecting. */
+  breakDebris(d) {
+    d.active = false;
+    this.spawnExplosion(d.x, d.y, d.r, COLORS.debris, d.r > 38);
+    this.synth.kill(d.r > 38);
+    const ore = coinValue(this.state.run.wave) * 0.9 * (this.sector.coinMult || 1);
+    for (let i = 0; i < 2; i++) {
+      const p = this.pickups.obtain();
+      p.active = true;
+      p.kind = 'coin';
+      p.value = ore / 2;
+      p.x = d.x + (Math.random() - 0.5) * d.r;
+      p.y = d.y + (Math.random() - 0.5) * d.r;
+      p.vx = (Math.random() - 0.5) * 110;
+      p.vy = -30 - Math.random() * 60;
+      p.life = 9;
+      p.angle = Math.random() * TAU;
+      p.spin = (Math.random() - 0.5) * 5;
     }
   }
 
@@ -213,6 +344,15 @@ export class Game {
 
   startWave() {
     const wave = this.state.run.wave;
+    // Self-healing rather than only on a block boundary: a run resumed from a
+    // save starts mid-block, and keying purely off isSectorStart left it flying
+    // through the Asteroid Belt with Outer Reach's palette and no debris.
+    if (this.sector.id !== sectorForWave(wave, BOSS_INTERVAL).id ||
+        isSectorStart(wave, BOSS_INTERVAL)) {
+      this.enterSector(wave);
+    }
+    const sec = this.sector;
+
     const table = spawnTable(wave);
     const total = table.reduce((a, t) => a + t.weight, 0);
     const count = enemyCount(wave);
@@ -227,9 +367,13 @@ export class Game {
       for (const t of table) { r -= t.weight; if (r <= 0) { pick = t; break; } }
       const a = pick.arch;
       this.spawnQueue.push({
-        type: pick.key, hp: baseHP * a.hp, speed: baseSpd * a.speed,
-        dmg: baseDmg * a.dmg, coin: baseCoin * a.coin, radius: a.radius,
-        sides: a.sides, shield: a.shield ? baseHP * a.shield * 0.5 : 0,
+        type: pick.key,
+        hp: baseHP * a.hp * (sec.hpMult || 1),
+        speed: baseSpd * a.speed * (sec.speedMult || 1),
+        dmg: baseDmg * a.dmg,
+        coin: baseCoin * a.coin * (sec.coinMult || 1),
+        radius: a.radius, sides: a.sides,
+        shield: a.shield ? baseHP * a.shield * 0.5 : 0,
         ranged: !!a.ranged, phase: !!a.phase,
         splits: pick.key === 'splitter' ? 2 : 0,
       });
@@ -237,14 +381,18 @@ export class Game {
     if (isBossWave(wave)) {
       const b = bossStats(wave);
       this.spawnQueue.push({
-        type: 'boss', hp: b.hp, speed: b.speed, dmg: b.damage, coin: b.coins,
+        type: 'boss', hp: b.hp * (sec.hpMult || 1), speed: b.speed * (sec.speedMult || 1),
+        dmg: b.damage, coin: b.coins * (sec.coinMult || 1),
         radius: b.radius, sides: 8, shield: 0, boss: true, splits: 0,
       });
       this.synth.boss();
       this.emit('boss', { wave });
     }
 
-    this.spawnInterval = spawnWindow(wave) / Math.max(1, this.spawnQueue.length);
+    // Enemies arrive in formations rather than one at a time — a wall of six
+    // sweeping down together reads far better than a trickle.
+    this.formationSize = Math.min(9, 2 + Math.floor(Math.sqrt(wave) / 1.6));
+    this.spawnInterval = (spawnWindow(wave) / Math.max(1, this.spawnQueue.length)) * this.formationSize;
     this.spawnTimer = 0;
     this.waveActive = true;
     this.waveTime = 0;
@@ -255,11 +403,11 @@ export class Game {
 
   completeWave() {
     const { run } = this.state;
-    const bonus = waveClearBonus(run.wave) * this.stats.coinMult;
+    const bonus = waveClearBonus(run.wave) * this.stats.coinMult * (this.sector.coinMult || 1);
     run.coins += bonus;
-    this.addFloater(this.cx, this.cy - 70, '+' + Math.floor(bonus), COLORS.coin, 1.3);
+    this.addFloater(this.ship.x, this.ship.y - 60, '+' + Math.floor(bonus), COLORS.coin, 1.3);
     this.waveActive = false;
-    this.interWave = 1.1;
+    this.interWave = 1.0;
 
     if (run.wave > this.state.meta.bestWave) this.state.meta.bestWave = run.wave;
     this.emit('waveClear', { wave: run.wave, bonus });
@@ -274,19 +422,40 @@ export class Game {
     this.state.markDirty();
   }
 
-  spawnOne(def) {
+  /** Release one formation of up to `formationSize` enemies in a pattern. */
+  spawnFormation() {
+    const n = Math.min(this.formationSize, this.spawnQueue.length);
+    if (n <= 0) return;
+    const pattern = ['line', 'vee', 'arc', 'column'][(Math.random() * 4) | 0];
+    const margin = 46;
+    const laneW = this.fieldW - margin * 2;
+    const anchor = this.x0 + margin + Math.random() * laneW;
+
+    for (let i = 0; i < n; i++) {
+      const def = this.spawnQueue.shift();
+      const t = n === 1 ? 0.5 : i / (n - 1);
+      let x = anchor, yOff = 0;
+      if (pattern === 'line') {
+        x = this.x0 + margin + laneW * (0.5 + (t - 0.5) * 0.85);
+      } else if (pattern === 'vee') {
+        x = this.cx + (t - 0.5) * laneW * 0.7;
+        yOff = -Math.abs(t - 0.5) * 120;
+      } else if (pattern === 'arc') {
+        x = this.cx + Math.sin((t - 0.5) * Math.PI) * laneW * 0.42;
+        yOff = -Math.cos((t - 0.5) * Math.PI) * 70;
+      } else {
+        x = anchor;
+        yOff = -i * 62;
+      }
+      this.spawnOne(def, x, yOff);
+    }
+  }
+
+  spawnOne(def, x, yOff) {
     const e = this.enemies.obtain();
-    const ang = Math.random() * TAU;
     e.active = true;
-    e.x = this.cx + Math.cos(ang) * this.spawnRX;
-    e.y = this.cy + Math.sin(ang) * this.spawnRY;
-    // balance.js gives speeds in px/sec against a reference approach of
-    // REFERENCE_APPROACH px (what tools/simulate.mjs assumes). Real approach
-    // length varies with viewport and spawn angle, so scale the speed to keep
-    // time-to-contact — the thing that actually decides whether a wave kills
-    // you — identical everywhere. Without this, a wide monitor is far easier
-    // than a phone purely because enemies walk further.
-    e.distScale = Math.hypot(e.x - this.cx, e.y - this.cy) / REFERENCE_APPROACH;
+    e.x = Math.min(Math.max(x, this.x0 + 24), this.x1 - 24);
+    e.y = this.y0 - 26 + (yOff || 0);
     e.hp = e.maxHp = def.hp;
     e.speed = def.speed;
     e.dmg = def.dmg;
@@ -300,40 +469,198 @@ export class Game {
     e.phase = !!def.phase;
     e.splits = def.splits || 0;
     e.color = COLORS[def.type] || COLORS.drone;
-    e.angle = Math.random() * TAU;
-    e.spin = (Math.random() - 0.5) * 1.6;
-    e.slowT = 0; e.hitFlash = 0; e.fireT = 1 + Math.random(); e.phaseT = Math.random() * TAU;
-    e.held = 0;
+    e.angle = 0;
+    e.spin = 0;
+    e.hitFlash = 0;
+    e.fireT = 0.8 + Math.random();
+    e.phaseT = Math.random() * TAU;
+    e.stun = 0;
+    e.t = 0;
+    e.homeX = e.x;
+    e.amp = 40 + Math.random() * 70;
+    e.freq = 0.7 + Math.random() * 0.8;
+    e.distScale = this.approach / REFERENCE_APPROACH;
+
+    // Behaviour by archetype. "Most enemies attack by bumping" — dive and
+    // swarm both end in a ram, which is why contact damage still drives the
+    // balance model.
+    if (def.boss) { e.behavior = 'boss'; e.holdY = this.y0 + this.fieldH * 0.22; }
+    else if (def.ranged) { e.behavior = 'hover'; e.holdY = this.y0 + this.fieldH * (0.22 + Math.random() * 0.2); }
+    else if (def.type === 'darter' || def.type === 'wraith') e.behavior = 'swarm';
+    else if (def.type === 'splitter' || def.type === 'shielder') e.behavior = 'weave';
+    else e.behavior = 'dive';
+
     if (def.boss) { this.shake(14); this.flash([0.35, 0.05, 0.1], 0.5); }
     return e;
   }
 
-  // --- combat ----------------------------------------------------------------
+  // --- the autopilot ----------------------------------------------------------
+
+  /**
+   * Steering. This is the heart of "fun to watch": the ship has to look like a
+   * competent pilot, not a magnet or a brick.
+   *
+   * Four weighted urges, summed and clamped:
+   *   1. get away from anything about to hit us, weighted by how soon
+   *   2. slide out of the path of incoming fire
+   *   3. drift toward loose pickups
+   *   4. hold station in the lower band and inside the lane
+   *
+   * Deliberately imperfect. A pilot that never takes a hit removes all tension
+   * and makes hull, shields and armour upgrades pointless, so the threat radius
+   * is short and the acceleration finite — it dodges what it can and wears what
+   * it cannot.
+   */
+  steer(dt) {
+    const s = this.stats;
+    const ship = this.ship;
+    let ax = 0, ay = 0;
+
+    const evade = s.evasion || 1;
+    const look = 150 * evade;
+
+    // 1 & 2 — threats
+    for (const e of this.enemies.items) {
+      if (!e.active) continue;
+      const dx = ship.x - e.x, dy = ship.y - e.y;
+      const d = Math.hypot(dx, dy);
+      if (d > look + e.radius) continue;
+      const urgency = 1 - d / (look + e.radius);
+      // Sideways is cheaper than vertical: the lane is wider than it is tall.
+      ax += (dx / (d || 1)) * urgency * urgency * 2600;
+      ay += (dy / (d || 1)) * urgency * urgency * 900;
+    }
+    for (const b of this.bullets.items) {
+      if (!b.active || !b.fromEnemy) continue;
+      const dx = ship.x - b.x, dy = ship.y - b.y;
+      const d = Math.hypot(dx, dy);
+      if (d > look * 0.8) continue;
+      const urgency = 1 - d / (look * 0.8);
+      // Break perpendicular to the bullet's travel — stepping aside beats
+      // outrunning it.
+      const bl = Math.hypot(b.vx, b.vy) || 1;
+      const px = -b.vy / bl, py = b.vx / bl;
+      const side = (px * dx + py * dy) >= 0 ? 1 : -1;
+      ax += px * side * urgency * 2400;
+      ay += py * side * urgency * 600;
+    }
+    for (const d of this.debris.items) {
+      if (!d.active) continue;
+      const dx = ship.x - d.x, dy = ship.y - d.y;
+      const dist = Math.hypot(dx, dy);
+      const reach = d.r + look * 0.7;
+      if (dist > reach) continue;
+      const urgency = 1 - dist / reach;
+      ax += (dx / (dist || 1)) * urgency * urgency * 3000;
+      ay += (dy / (dist || 1)) * urgency * urgency * 1100;
+    }
+
+    // 3 — loose pickups worth a detour
+    let bestP = null, bestD = 1e9;
+    for (const p of this.pickups.items) {
+      if (!p.active) continue;
+      const dx = p.x - ship.x, dy = p.y - ship.y;
+      const d = Math.hypot(dx, dy);
+      if (d < bestD) { bestD = d; bestP = p; }
+    }
+    if (bestP && bestD < 260) {
+      ax += ((bestP.x - ship.x) / (bestD || 1)) * 620;
+      ay += ((bestP.y - ship.y) / (bestD || 1)) * 380;
+    }
+
+    // 4 — line up the shot. Weak on purpose: it should lose to anything about
+    // to hit us, so the ship breaks off an attack run to dodge and drifts back.
+    if (this.target) {
+      const tdx = this.target.x - ship.x;
+      ax += Math.max(-1, Math.min(1, tdx / 90)) * 780;
+    }
+
+    // 5 — station keeping
+    ay += (this.shipHomeY - ship.y) * 5.2;
+    const edge = 44;
+    if (ship.x < this.x0 + edge) ax += (this.x0 + edge - ship.x) * 22;
+    if (ship.x > this.x1 - edge) ax -= (ship.x - (this.x1 - edge)) * 22;
+    if (ship.y < this.y0 + 60) ay += (this.y0 + 60 - ship.y) * 22;
+    if (ship.y > this.y1 - 34) ay -= (ship.y - (this.y1 - 34)) * 22;
+
+    const maxSpeed = 300 * evade;
+    ship.vx += ax * dt;
+    ship.vy += ay * dt;
+    const drag = Math.pow(0.0016, dt);
+    ship.vx *= drag;
+    ship.vy *= drag;
+    const sp = Math.hypot(ship.vx, ship.vy);
+    if (sp > maxSpeed) { ship.vx = ship.vx / sp * maxSpeed; ship.vy = ship.vy / sp * maxSpeed; }
+
+    ship.x += ship.vx * dt;
+    ship.y += ship.vy * dt;
+    ship.x = Math.min(Math.max(ship.x, this.x0 + 20), this.x1 - 20);
+    ship.y = Math.min(Math.max(ship.y, this.y0 + 34), this.y1 - 22);
+    // Bank into the turn; purely cosmetic but it is most of what makes the
+    // autopilot read as a pilot.
+    ship.bank += ((ship.vx / maxSpeed) * 0.5 - ship.bank) * Math.min(1, dt * 8);
+    ship.thrust = 0.6 + Math.min(0.4, Math.abs(ship.vy) / 300);
+  }
+
+  // --- combat -----------------------------------------------------------------
+
+  /**
+   * Best thing to shoot: nearest enemy ahead of the ship, biased toward ones
+   * roughly in front rather than far out to the side.
+   *
+   * The old static tower could rotate and engage anything in range. A ship
+   * firing straight up cannot, and losing that was worth roughly six-sevenths
+   * of the game's effective DPS — an unaided run died on wave 8 instead of the
+   * high forties. Guns lead the target within a forward cone, and the autopilot
+   * gently lines up on it, which restores the damage AND makes the pilot look
+   * like it is aiming rather than spraying.
+   */
+  acquireTarget() {
+    const ship = this.ship;
+    const reach = this.stats.range * 1.8;
+    let best = null, bestScore = Infinity;
+    for (const e of this.enemies.items) {
+      if (!e.active) continue;
+      if (e.y > ship.y + 24) continue;                 // already behind us
+      if (e.phase && Math.sin(e.phaseT) > 0.55) continue;
+      const dx = e.x - ship.x, dy = e.y - ship.y;
+      const d = Math.hypot(dx, dy);
+      if (d > reach) continue;
+      const score = d + Math.abs(dx) * 0.9;            // prefer dead ahead
+      if (score < bestScore) { bestScore = score; best = e; }
+    }
+    return best;
+  }
 
   fire(dt) {
     const s = this.stats;
     const rate = s.fireRate * (this.buffs.overdrive > 0 ? 2.5 : 1);
     this.fireTimer -= dt;
     if (this.fireTimer > 0) return;
-
-    const target = this.nearestEnemy(this.cx, this.cy, s.range);
-    if (!target) { this.fireTimer = 0; return; }
-
     this.fireTimer += 1 / Math.max(0.1, rate);
 
-    const base = Math.atan2(target.y - this.cy, target.x - this.cx);
-    this.turretAngle = base;
-    const spread = s.shots > 1 ? 0.20 : 0;
+    const ship = this.ship;
+    const target = this.target;
+    let aim = -Math.PI / 2;
+    if (target) {
+      const raw = Math.atan2(target.y - ship.y, target.x - ship.x);
+      // Clamp into a forward cone so the ship never shoots backwards.
+      let delta = raw - aim;
+      while (delta > Math.PI) delta -= TAU;
+      while (delta < -Math.PI) delta += TAU;
+      aim += Math.max(-AIM_CONE, Math.min(AIM_CONE, delta));
+    }
 
+    const spread = 0.13;
     for (let i = 0; i < s.shots; i++) {
       const off = s.shots > 1 ? (i - (s.shots - 1) / 2) * spread : 0;
-      const ang = base + off;
+      const ang = aim + off + ship.bank * 0.1;
       const crit = Math.random() < s.critChance;
       const b = this.bullets.obtain();
       b.active = true;
-      b.x = this.cx + Math.cos(ang) * 26;
-      b.y = this.cy + Math.sin(ang) * 26;
-      const speed = 620;
+      b.x = ship.x + Math.cos(ang) * 18;
+      b.y = ship.y + Math.sin(ang) * 18;
+      const speed = 760;
       b.vx = Math.cos(ang) * speed;
       b.vy = Math.sin(ang) * speed;
       b.dmg = s.damage * (crit ? s.critMult : 1);
@@ -345,21 +672,8 @@ export class Game {
       b.hits = b.hits || new Set();
       b.hits.clear();
     }
-    this.spawnMuzzle(base);
+    this.spawnMuzzle();
     this.synth.shot(1 + (this.buffs.overdrive > 0 ? 0.25 : 0));
-  }
-
-  nearestEnemy(x, y, maxDist) {
-    let best = null, bestD = maxDist * maxDist;
-    const items = this.enemies.items;
-    for (let i = 0; i < items.length; i++) {
-      const e = items[i];
-      if (!e.active) continue;
-      const dx = e.x - x, dy = e.y - y;
-      const d = dx * dx + dy * dy;
-      if (d < bestD) { bestD = d; best = e; }
-    }
-    return best;
   }
 
   damageEnemy(e, amount, crit, showNumber = true) {
@@ -371,51 +685,85 @@ export class Game {
     }
     e.hp -= amount;
     e.hitFlash = 0.12;
-    if (showNumber && Math.random() < 0.35) {
+    if (showNumber && Math.random() < 0.3) {
       this.addFloater(e.x, e.y - e.radius, fmtShort(amount),
         crit ? [1.6, 1.2, 0.4] : [1, 1, 1], crit ? 1.15 : 0.85);
     }
     if (e.hp <= 0) this.killEnemy(e);
   }
 
-  killEnemy(e) {
+  killEnemy(e, silent) {
     const { run, meta } = this.state;
     e.active = false;
     run.kills++;
     meta.totalKills++;
 
-    const gained = e.coin * this.stats.coinMult;
-    run.coins += gained;
+    this.spawnExplosion(e.x, e.y, e.radius, e.color, e.boss);
+    this.synth.kill(e.boss);
+
+    if (!silent) this.dropLoot(e);
+
     if (this.stats.lifesteal > 0) {
       run.hull = Math.min(this.stats.maxHull, run.hull + this.stats.lifesteal);
     }
 
-    this.spawnExplosion(e.x, e.y, e.radius, e.color, e.boss);
-    this.synth.kill(e.boss);
-
     if (e.boss) {
       this.shake(26);
       this.flash([0.5, 0.15, 0.2], 0.8);
-      this.addFloater(e.x, e.y, '+' + fmtShort(gained), COLORS.coin, 1.8);
       this.emit('bossKill', { wave: run.wave });
     } else if (e.splits > 0) {
       for (let i = 0; i < e.splits; i++) {
         const c = this.enemies.obtain();
         Object.assign(c, {
-          active: true, x: e.x + (Math.random() - 0.5) * 20, y: e.y + (Math.random() - 0.5) * 20,
+          active: true, x: e.x + (Math.random() - 0.5) * 26, y: e.y,
           hp: e.maxHp * 0.32, maxHp: e.maxHp * 0.32, speed: e.speed * 1.4,
           dmg: e.dmg * 0.5, coin: e.coin * 0.3, radius: e.radius * 0.62,
           sides: 4, shield: 0, maxShield: 0, type: 'splitter', color: COLORS.splitter,
-          boss: false, ranged: false, phase: false, splits: 0,
-          angle: Math.random() * TAU, spin: (Math.random() - 0.5) * 3,
-          slowT: 0, hitFlash: 0, fireT: 0, phaseT: 0, held: 0, distScale: e.distScale,
+          boss: false, ranged: false, phase: false, splits: 0, behavior: 'swarm',
+          angle: 0, spin: 0, hitFlash: 0, fireT: 0, phaseT: 0, stun: 0, t: 0,
+          homeX: e.x, amp: 30, freq: 1.2, distScale: e.distScale,
         });
       }
     }
     this.state.markDirty();
   }
 
-  damageTower(amount, source) {
+  /** Kills scatter physical loot the ship has to fly over to collect. */
+  dropLoot(e) {
+    const n = e.boss ? 14 : 1 + (Math.random() < 0.25 ? 1 : 0);
+    const per = e.coin / n;
+    for (let i = 0; i < n; i++) {
+      const p = this.pickups.obtain();
+      p.active = true;
+      p.kind = 'coin';
+      p.value = per;
+      p.x = e.x + (Math.random() - 0.5) * (e.boss ? 90 : 18);
+      p.y = e.y + (Math.random() - 0.5) * (e.boss ? 90 : 18);
+      p.vx = (Math.random() - 0.5) * 90;
+      p.vy = -40 - Math.random() * 70;
+      p.life = 9;
+      p.angle = Math.random() * TAU;
+      p.spin = (Math.random() - 0.5) * 5;
+    }
+    // Occasional field repair — the pickup that makes a bad patch survivable.
+    if (!e.boss && Math.random() < 0.012) this.dropRepair(e.x, e.y);
+    else if (e.boss) this.dropRepair(e.x, e.y);
+  }
+
+  dropRepair(x, y) {
+    const p = this.pickups.obtain();
+    p.active = true;
+    p.kind = 'repair';
+    p.value = 0.16;                 // fraction of max hull
+    p.x = x; p.y = y;
+    p.vx = (Math.random() - 0.5) * 50;
+    p.vy = -30;
+    p.life = 11;
+    p.angle = 0;
+    p.spin = 1.4;
+  }
+
+  damageShip(amount, source) {
     const { run } = this.state;
     if (this.buffs.aegis > 0) { this.synth.shieldHit(); return; }
     const s = this.stats;
@@ -426,7 +774,7 @@ export class Game {
       run.shield -= absorbed;
       dmg -= absorbed;
       this.synth.shieldHit();
-      this.spawnRing(this.cx, this.cy, 46, COLORS.shield);
+      this.spawnRing(this.ship.x, this.ship.y, 40, COLORS.shield, 0.3);
     }
     if (dmg > 0) {
       run.hull -= dmg;
@@ -448,10 +796,11 @@ export class Game {
     this.synth.death();
     this.shake(34);
     this.flash([0.55, 0.1, 0.15], 1.1);
+    this.spawnExplosion(this.ship.x, this.ship.y, 30, COLORS.ship, true);
     this.emit('runOver', { wave: run.wave, cores });
   }
 
-  // --- abilities --------------------------------------------------------------
+  // --- abilities ---------------------------------------------------------------
 
   useAbility(key) {
     const { run } = this.state;
@@ -466,45 +815,42 @@ export class Game {
       this.buffs.overdrive = def.dur;
       this.flash([0.35, 0.25, 0.05], 0.4);
     } else if (key === 'nova') {
-      // Scaled off current-wave HP so it stays relevant at any depth.
       const power = enemyHP(run.wave) * 5.5 + this.stats.damage * 30;
       for (const e of this.enemies.items) {
         if (!e.active) continue;
         this.damageEnemy(e, power, false, false);
       }
-      this.spawnRing(this.cx, this.cy, this.w, [0.4, 0.9, 1.6], 0.9);
+      this.spawnRing(this.ship.x, this.ship.y, Math.max(this.fieldW, this.fieldH), [0.4, 0.9, 1.6], 0.9);
       this.shake(20);
       this.flash([0.2, 0.45, 0.6], 0.85);
     } else if (key === 'aegis') {
       this.buffs.aegis = def.dur;
       run.shield = this.stats.maxShield;
       run.hull = Math.min(this.stats.maxHull, run.hull + this.stats.maxHull * 0.25);
-      this.spawnRing(this.cx, this.cy, 120, [0.4, 1.5, 0.9], 0.8);
+      this.spawnRing(this.ship.x, this.ship.y, 120, [0.4, 1.5, 0.9], 0.8);
     } else if (key === 'singularity') {
-      this.singularity = { t: def.dur, x: this.cx, y: this.cy, r: 0 };
+      // Opens ahead of the ship and hauls the lane into it.
+      this.singularity = { t: def.dur, x: this.ship.x, y: this.y0 + this.fieldH * 0.3 };
       this.buffs.singularity = def.dur;
     } else if (key === 'lance') {
-      this.lance = { t: def.dur, angle: Math.random() * TAU };
+      this.lance = { t: def.dur };
       this.buffs.lance = def.dur;
     }
     this.state.markDirty();
     return true;
   }
 
-  // --- particles / feedback ----------------------------------------------------
+  // --- feedback ------------------------------------------------------------------
 
   shake(amount) { this.shakeAmount = Math.min(46, this.shakeAmount + amount); }
 
   flash(color, amount) {
-    if (amount > this.flashAmount) {
-      this.flashAmount = amount;
-      this.flashColor = color;
-    }
+    if (amount > this.flashAmount) { this.flashAmount = amount; this.flashColor = color; }
   }
 
   addFloater(x, y, text, color, scale = 1) {
     if (this.floaters.length > 44) this.floaters.shift();
-    this.floaters.push({ x, y, text, color, scale, life: 0.95, maxLife: 0.95, vy: -42 });
+    this.floaters.push({ x, y, text, color, scale, life: 0.9, maxLife: 0.9, vy: -46 });
   }
 
   spawnParticle(x, y, vx, vy, life, size, color, drag = 0.94, kind = 0) {
@@ -519,15 +865,24 @@ export class Game {
     return p;
   }
 
-  spawnMuzzle(angle) {
-    const x = this.cx + Math.cos(angle) * 30;
-    const y = this.cy + Math.sin(angle) * 30;
-    for (let i = 0; i < 3; i++) {
-      const a = angle + (Math.random() - 0.5) * 0.7;
-      const sp = 120 + Math.random() * 180;
-      this.spawnParticle(x, y, Math.cos(a) * sp, Math.sin(a) * sp,
-        0.16 + Math.random() * 0.1, 3 + Math.random() * 3, COLORS.bullet, 0.88, 1);
+  spawnMuzzle() {
+    const { x, y } = this.ship;
+    for (let i = 0; i < 2; i++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 0.8;
+      const sp = 90 + Math.random() * 150;
+      this.spawnParticle(x, y - 14, Math.cos(a) * sp, Math.sin(a) * sp,
+        0.14, 3 + Math.random() * 2.5, COLORS.bullet, 0.88, 1);
     }
+  }
+
+  spawnThrust(dt) {
+    const ship = this.ship;
+    if (Math.random() > dt * 70) return;
+    this.spawnParticle(
+      ship.x - ship.bank * 8 + (Math.random() - 0.5) * 6, ship.y + 15,
+      -ship.vx * 0.2 + (Math.random() - 0.5) * 30,
+      130 + Math.random() * 90,
+      0.28, 3.5 + Math.random() * 2.5, COLORS.ship, 0.9, 1);
   }
 
   spawnExplosion(x, y, radius, color, big) {
@@ -539,34 +894,33 @@ export class Game {
         0.3 + Math.random() * (big ? 0.7 : 0.35),
         (big ? 5 : 2.5) + Math.random() * (big ? 9 : 4), color, 0.9, 1);
     }
-    // Core flash
     this.spawnParticle(x, y, 0, 0, big ? 0.35 : 0.16, radius * (big ? 3.4 : 1.9), color, 1, 2);
   }
 
   spawnRing(x, y, radius, color, life = 0.45) {
-    const p = this.spawnParticle(x, y, 0, 0, life, radius, color, 1, 3);
-    p.maxLife = life;
+    this.spawnParticle(x, y, 0, 0, life, radius, color, 1, 3);
   }
 
   // --- update -----------------------------------------------------------------
 
   update(dtRaw) {
-    if (this.paused || this.state.run.over) {
-      this.decayFeedback(dtRaw);
-      return;
-    }
-    // Clamp so a backgrounded tab does not resume with a giant catch-up step
-    // that teleports enemies through the tower.
+    if (this.paused || this.state.run.over) { this.decayFeedback(dtRaw); return; }
     const dt = Math.min(0.05, dtRaw) * this.timeScale;
     const { run } = this.state;
     run.elapsed += dt;
 
     this.updateBuffs(dt);
+    this.updateBackdrop(dt);
+    this.updateHazards(dt);
     this.updateWave(dt);
+    this.target = this.acquireTarget();
+    this.steer(dt);
+    this.spawnThrust(dt);
     this.fire(dt);
     this.updateBullets(dt);
     this.updateEnemies(dt);
-    this.updateDrones(dt);
+    this.updateWingmen(dt);
+    this.updatePickups(dt);
     this.updateParticles(dt);
     this.updateFloaters(dt);
     this.updateRegen(dt);
@@ -575,21 +929,55 @@ export class Game {
 
   updateBuffs(dt) {
     for (const k of Object.keys(this.buffs)) {
-      if (this.buffs[k] > 0) {
-        this.buffs[k] -= dt;
-        if (this.buffs[k] <= 0) {
-          delete this.buffs[k];
-          if (k === 'singularity') this.singularity = null;
-          if (k === 'lance') this.lance = null;
-        }
+      this.buffs[k] -= dt;
+      if (this.buffs[k] <= 0) {
+        delete this.buffs[k];
+        if (k === 'singularity') this.singularity = null;
+        if (k === 'lance') this.lance = null;
       }
     }
     const cds = this.state.run.cooldowns;
-    for (const k of Object.keys(cds)) {
-      if (cds[k] > 0) cds[k] = Math.max(0, cds[k] - dt);
-    }
+    for (const k of Object.keys(cds)) if (cds[k] > 0) cds[k] = Math.max(0, cds[k] - dt);
     if (this.singularity) this.singularity.t -= dt;
-    if (this.lance) { this.lance.t -= dt; this.lance.angle += dt * 2.4; }
+    if (this.lance) this.lance.t -= dt;
+  }
+
+  updateHazards(dt) {
+    const sec = this.sector;
+    const scroll = this.scrollSpeed * (sec.scrollMult || 1);
+
+    // Drifting rock. Purely a hazard — it never blocks your shots, so it is
+    // spectacle and dodging practice rather than a damage check.
+    if (sec.debris > 0 && Math.random() < dt * sec.debris * 0.17) this.spawnDebris();
+    for (const d of this.debris.items) {
+      if (!d.active) continue;
+      d.y += scroll * d.vy * dt;
+      d.angle += d.spin * dt;
+      if (d.flash > 0) d.flash -= dt;
+      if (d.y - d.r > this.y1 + 40) { d.active = false; continue; }
+      const dx = this.ship.x - d.x, dy = this.ship.y - d.y;
+      if (Math.hypot(dx, dy) < d.r + this.ship.radius) {
+        this.damageShip(enemyDamage(this.state.run.wave) * 0.7 * TUNING.CONTACT_SCALE, null);
+        this.breakDebris(d);
+      }
+    }
+
+    // Ion Storm: an arc sweeps the lane and stuns whatever it crosses. A
+    // benefit to the player, offsetting the zone's faster enemies.
+    if (sec.effect === 'storm') {
+      this.stormTimer -= dt;
+      if (!this.storm && this.stormTimer <= 0) {
+        this.storm = { t: 0.55, y: this.y0 + Math.random() * this.fieldH * 0.8, seed: Math.random() * 1000 };
+        this.stormTimer = 5 + Math.random() * 5;
+        this.flash([0.25, 0.4, 0.7], 0.5);
+        this.synth.ability();
+        for (const e of this.enemies.items) {
+          if (!e.active || e.boss) continue;
+          if (Math.abs(e.y - this.storm.y) < 90) e.stun = 1.3;
+        }
+      }
+      if (this.storm) { this.storm.t -= dt; if (this.storm.t <= 0) this.storm = null; }
+    }
   }
 
   updateWave(dt) {
@@ -599,16 +987,15 @@ export class Game {
       return;
     }
 
-    // Anti-stall. Sentinels hold at range instead of closing, so a bastion with
-    // strong regen but not enough damage to finish them can sit in a wave
+    // Anti-stall. Hovering shooters hold at range rather than closing, so a
+    // ship with strong regen but not enough damage could sit in one wave
     // forever — neither winning nor dying. After ENRAGE_AFTER the survivors
-    // wind up: faster and hitting harder, without end. The standoff always
-    // resolves, one way or the other.
+    // wind up, without limit. The standoff always resolves.
     this.waveTime += dt;
     if (this.waveTime > ENRAGE_AFTER) {
       const prev = this.enrage;
       this.enrage = (this.waveTime - ENRAGE_AFTER) / 30;
-      if (prev === 0 && this.enrage > 0) {
+      if (prev === 0) {
         this.emit('enrage', { wave: this.state.run.wave });
         this.flash([0.4, 0.1, 0.1], 0.5);
       }
@@ -616,12 +1003,12 @@ export class Game {
 
     this.spawnTimer -= dt;
     while (this.spawnQueue.length && this.spawnTimer <= 0) {
-      this.spawnOne(this.spawnQueue.shift());
+      this.spawnFormation();
       this.spawnTimer += this.spawnInterval;
     }
     if (!this.spawnQueue.length) {
       let anyAlive = false;
-      for (const e of this.enemies.items) { if (e.active) { anyAlive = true; break; } }
+      for (const e of this.enemies.items) if (e.active) { anyAlive = true; break; }
       if (!anyAlive) this.completeWave();
     }
   }
@@ -635,24 +1022,41 @@ export class Game {
       b.x += b.vx * dt;
       b.y += b.vy * dt;
       b.life -= dt;
-      if (b.life <= 0 || b.x < -60 || b.y < -60 || b.x > this.w + 60 || b.y > this.h + 60) {
+      if (b.life <= 0 || b.y < this.y0 - 60 || b.y > this.y1 + 60 ||
+          b.x < this.x0 - 60 || b.x > this.x1 + 60) {
         b.active = false;
         continue;
       }
 
       if (b.fromEnemy) {
-        const dx = b.x - this.cx, dy = b.y - this.cy;
-        if (dx * dx + dy * dy < 30 * 30) {
+        const dx = b.x - this.ship.x, dy = b.y - this.ship.y;
+        if (dx * dx + dy * dy < (this.ship.radius + b.radius) ** 2) {
           b.active = false;
-          this.damageTower(b.dmg, null);
+          this.damageShip(b.dmg, null);
         }
         continue;
       }
 
+      let consumed = false;
+      for (const d of this.debris.items) {
+        if (!d.active || b.hits.has(d)) continue;
+        const ddx = d.x - b.x, ddy = d.y - b.y;
+        if (ddx * ddx + ddy * ddy <= (d.r + b.radius) ** 2) {
+          b.hits.add(d);
+          d.hp -= b.dmg;
+          d.flash = 0.1;
+          this.spawnParticle(b.x, b.y, (Math.random() - 0.5) * 90, (Math.random() - 0.5) * 90,
+            0.18, 2.5, COLORS.debris, 0.9, 1);
+          if (d.hp <= 0) this.breakDebris(d);
+          if (--b.pierce <= 0) { b.active = false; consumed = true; }
+          break;
+        }
+      }
+      if (consumed) continue;
+
       for (let j = 0; j < enemies.length; j++) {
         const e = enemies[j];
         if (!e.active || b.hits.has(e)) continue;
-        // Wraiths blink out of phase and cannot be hit for part of their cycle.
         if (e.phase && Math.sin(e.phaseT) > 0.55) continue;
         const dx = e.x - b.x, dy = e.y - b.y;
         const rr = e.radius + b.radius;
@@ -674,108 +1078,218 @@ export class Game {
 
   updateEnemies(dt) {
     const s = this.stats;
+    const ship = this.ship;
     const items = this.enemies.items;
     const sing = this.singularity;
+    const enrageMul = 1 + this.enrage * 1.5;
+    const regen = this.sector.enemyRegen || 0;
 
     for (let i = 0; i < items.length; i++) {
       const e = items[i];
       if (!e.active) continue;
-
-      e.angle += e.spin * dt;
+      e.t += dt;
       if (e.hitFlash > 0) e.hitFlash -= dt;
       if (e.phase) e.phaseT += dt * 2.6;
+      if (regen > 0 && e.hp < e.maxHp) e.hp = Math.min(e.maxHp, e.hp + e.maxHp * regen * dt);
 
-      let dx = this.cx - e.x, dy = this.cy - e.y;
-      let dist = Math.hypot(dx, dy) || 0.001;
+      if (e.stun > 0) {
+        e.stun -= dt;
+        e.angle += dt * 9;
+        if (Math.random() < dt * 12) {
+          this.spawnParticle(e.x, e.y, (Math.random() - 0.5) * 90, (Math.random() - 0.5) * 90,
+            0.16, 2.5, [0.5, 0.8, 1.6], 0.9, 1);
+        }
+        continue;
+      }
 
-      // Singularity overrides normal movement: everything is dragged to the
-      // well and pinned there while it lasts.
+      const speed = e.speed * e.distScale * enrageMul;
+
       if (sing && sing.t > 0) {
         const sdx = sing.x - e.x, sdy = sing.y - e.y;
         const sd = Math.hypot(sdx, sdy) || 0.001;
         const pull = Math.min(560, 22000 / Math.max(40, sd));
         e.x += (sdx / sd) * pull * dt;
         e.y += (sdy / sd) * pull * dt;
-        e.spin = 6;
-        if (sd < 90) continue;
+        e.angle += dt * 6;
         continue;
       }
 
-      const speed = e.speed * e.distScale * (1 - s.slowField) * (1 + this.enrage * 1.5);
-
-      if (e.ranged) {
-        // Sentinels hold at three-quarters of tower range and shoot.
-        // An enraged Sentinel abandons its standoff and charges.
-        const hold = this.enrage > 0 ? 0 : s.range * 0.78;
-        if (dist > hold) {
-          e.x += (dx / dist) * speed * dt;
-          e.y += (dy / dist) * speed * dt;
-        } else {
-          e.fireT -= dt;
-          if (e.fireT <= 0) {
-            e.fireT = 2.4;
-            const b = this.bullets.obtain();
-            b.active = true;
-            b.x = e.x; b.y = e.y;
-            const sp = 240;
-            b.vx = (dx / dist) * sp; b.vy = (dy / dist) * sp;
-            b.dmg = e.dmg * 0.55;
-            b.pierce = 1; b.life = 4; b.radius = 4; b.crit = false;
-            b.fromEnemy = true;
-            b.hits = b.hits || new Set();
-            b.hits.clear();
+      switch (e.behavior) {
+        case 'swarm': {
+          // Fastest and most direct — a straight ram at where the ship is.
+          const dx = ship.x - e.x, dy = ship.y - e.y;
+          const d = Math.hypot(dx, dy) || 1;
+          e.x += (dx / d) * speed * 1.15 * dt;
+          e.y += (dy / d) * speed * 1.15 * dt;
+          e.angle = Math.atan2(dy, dx) - Math.PI / 2;
+          break;
+        }
+        case 'weave': {
+          e.homeX += (ship.x - e.homeX) * 0.28 * dt;
+          e.x = e.homeX + Math.sin(e.t * e.freq * 2.2) * e.amp;
+          e.y += speed * dt;
+          e.angle = Math.sin(e.t * e.freq * 2.2) * 0.5;
+          break;
+        }
+        case 'hover': {
+          // Holds high and shoots. The only archetype that does not ram.
+          if (e.y < e.holdY) e.y += speed * dt;
+          else {
+            e.x += Math.cos(e.t * 0.9) * 70 * dt;
+            e.fireT -= dt;
+            if (e.fireT <= 0) {
+              e.fireT = 2.2;
+              const dx = ship.x - e.x, dy = ship.y - e.y;
+              const d = Math.hypot(dx, dy) || 1;
+              const b = this.bullets.obtain();
+              b.active = true;
+              b.x = e.x; b.y = e.y;
+              b.vx = (dx / d) * 260; b.vy = (dy / d) * 260;
+              b.dmg = e.dmg * 0.55;
+              b.pierce = 1; b.life = 5; b.radius = 4.5; b.crit = false;
+              b.fromEnemy = true;
+              b.hits = b.hits || new Set();
+              b.hits.clear();
+            }
           }
+          e.angle = Math.PI;
+          break;
         }
-      } else {
-        e.x += (dx / dist) * speed * dt;
-        e.y += (dy / dist) * speed * dt;
+        case 'boss': {
+          if (e.y < e.holdY) e.y += speed * dt;
+          else {
+            e.x = this.cx + Math.sin(e.t * 0.55) * this.fieldW * 0.3;
+            e.fireT -= dt;
+            if (e.fireT <= 0) {
+              e.fireT = 1.5;
+              for (let k = -2; k <= 2; k++) {
+                const ang = Math.PI / 2 + k * 0.24;
+                const b = this.bullets.obtain();
+                b.active = true;
+                b.x = e.x; b.y = e.y + e.radius;
+                b.vx = Math.cos(ang) * 250; b.vy = Math.sin(ang) * 250;
+                b.dmg = e.dmg * 0.28;
+                b.pierce = 1; b.life = 6; b.radius = 5; b.crit = false;
+                b.fromEnemy = true;
+                b.hits = b.hits || new Set();
+                b.hits.clear();
+              }
+            }
+          }
+          e.angle = Math.PI;
+          break;
+        }
+        default: {
+          // 'dive' — descend while leaning toward the ship, ending in a ram.
+          const dx = ship.x - e.x;
+          e.x += Math.sign(dx) * Math.min(Math.abs(dx), speed * 0.55) * dt;
+          e.y += speed * dt;
+          e.angle = Math.PI + Math.max(-0.5, Math.min(0.5, dx / 260));
+          break;
+        }
       }
 
-      // Orbital lance: a rotating beam that shreds whatever it crosses.
-      if (this.lance && this.lance.t > 0) {
-        const ea = Math.atan2(e.y - this.cy, e.x - this.cx);
-        let diff = Math.abs(((ea - this.lance.angle + Math.PI) % TAU) - Math.PI);
-        if (diff < 0.16) {
-          this.damageEnemy(e, (enemyHP(this.state.run.wave) * 2.2 + s.damage * 8) * dt, false, false);
-          if (!e.active) continue;
-        }
+      if (this.lance && this.lance.t > 0 && Math.abs(e.x - ship.x) < 26) {
+        this.damageEnemy(e, (enemyHP(this.state.run.wave) * 2.2 + s.damage * 8) * dt, false, false);
+        if (!e.active) continue;
       }
 
-      if (dist <= 30 + e.radius * 0.5) {
-        this.damageTower(e.dmg * (1 + this.enrage * 2), e);
-        if (e.active) {
-          e.active = false;
-          this.spawnExplosion(e.x, e.y, e.radius, e.color, false);
+      // Contact: this is how most enemies "attack" and also how they die.
+      const dx = ship.x - e.x, dy = ship.y - e.y;
+      if (dx * dx + dy * dy < (ship.radius + e.radius) ** 2) {
+        this.damageShip(e.dmg * TUNING.CONTACT_SCALE * (1 + this.enrage * 2), e);
+        if (e.active && !e.boss) {
+          // A rammer is spent whether or not it killed you; still pays out.
+          this.killEnemy(e);
         }
+        continue;
+      }
+
+      // Anything that slips past is gone — no damage, but no loot either.
+      if (e.y - e.radius > this.y1 + 60 && e.behavior !== 'hover' && !e.boss) {
+        e.active = false;
       }
     }
   }
 
-  updateDrones(dt) {
+  updateWingmen(dt) {
     const s = this.stats;
     if (s.drones <= 0) return;
-    this.droneAngle += dt * 1.1;
-    const orbit = 74;
+    this.wingAngle += dt;
+    const dps = s.damage * s.fireRate * 0.2 * dt;
     for (let i = 0; i < s.drones; i++) {
-      const a = this.droneAngle + (i / s.drones) * TAU;
-      const dx = this.cx + Math.cos(a) * orbit;
-      const dy = this.cy + Math.sin(a) * orbit;
-      const target = this.nearestEnemy(dx, dy, s.range * 0.9);
-      if (!target) continue;
-      // Drones apply continuous damage rather than discrete shots — cheaper,
-      // and visually reads as a sustained tether.
-      this.damageEnemy(target, s.damage * s.fireRate * 0.2 * dt, false, false);
-      if (Math.random() < dt * 8) {
-        this.spawnParticle(dx, dy, (target.x - dx) * 1.6, (target.y - dy) * 1.6,
-          0.12, 2, COLORS.tower, 1, 1);
+      const side = i % 2 === 0 ? -1 : 1;
+      const rank = Math.floor(i / 2);
+      const wx = this.ship.x + side * (34 + rank * 24);
+      const wy = this.ship.y + 12 + rank * 16 + Math.sin(this.wingAngle * 2 + i) * 3;
+      let best = null, bestD = 1e9;
+      for (const e of this.enemies.items) {
+        if (!e.active) continue;
+        const d = Math.hypot(e.x - wx, e.y - wy);
+        if (d < bestD && d < s.range) { bestD = d; best = e; }
       }
+      if (!best) continue;
+      this.damageEnemy(best, dps, false, false);
+      if (Math.random() < dt * 9) {
+        this.spawnParticle(wx, wy, (best.x - wx) * 1.7, (best.y - wy) * 1.7,
+          0.12, 2, COLORS.ship, 1, 1);
+      }
+    }
+  }
+
+  updatePickups(dt) {
+    const { run } = this.state;
+    const s = this.stats;
+    const ship = this.ship;
+    const magnet = s.magnet;
+    const scroll = this.scrollSpeed * (this.sector.scrollMult || 1);
+
+    for (const p of this.pickups.items) {
+      if (!p.active) continue;
+      p.life -= dt;
+      p.angle += p.spin * dt;
+
+      const dx = ship.x - p.x, dy = ship.y - p.y;
+      const d = Math.hypot(dx, dy) || 1;
+      if (d < magnet) {
+        // Accelerating haul-in feels far better than a constant drag.
+        const pull = 900 * (1 - d / magnet) + 260;
+        p.vx += (dx / d) * pull * dt;
+        p.vy += (dy / d) * pull * dt;
+      } else {
+        p.vy += scroll * 0.35 * dt;        // otherwise it drifts with the world
+      }
+      p.vx *= Math.pow(0.35, dt);
+      p.vy *= Math.pow(0.35, dt);
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+
+      if (d < ship.radius + 12) {
+        p.active = false;
+        if (p.kind === 'coin') {
+          const gained = p.value * s.coinMult;
+          run.coins += gained;
+          if (Math.random() < 0.22) {
+            this.addFloater(p.x, p.y, '+' + fmtShort(gained), COLORS.coin, 0.8);
+          }
+          this.synth.click();
+        } else if (p.kind === 'repair') {
+          const heal = s.maxHull * p.value;
+          run.hull = Math.min(s.maxHull, run.hull + heal);
+          this.addFloater(p.x, p.y, '+' + fmtShort(heal) + ' HULL', COLORS.repair, 1.1);
+          this.spawnRing(ship.x, ship.y, 46, COLORS.repair, 0.4);
+          this.synth.upgrade();
+        }
+        this.state.markDirty();
+        continue;
+      }
+
+      if (p.life <= 0 || p.y > this.y1 + 40) p.active = false;
     }
   }
 
   updateParticles(dt) {
-    const items = this.particles.items;
-    for (let i = 0; i < items.length; i++) {
-      const p = items[i];
+    for (const p of this.particles.items) {
       if (!p.active) continue;
       p.life -= dt;
       if (p.life <= 0) { p.active = false; continue; }
@@ -812,7 +1326,7 @@ export class Game {
     if (this.flashAmount < 0.002) this.flashAmount = 0;
   }
 
-  // --- render -----------------------------------------------------------------
+  // --- render -------------------------------------------------------------------
 
   render(time) {
     const R = this.renderer;
@@ -827,64 +1341,103 @@ export class Game {
     R.flash[1] = this.flashColor[1] * this.flashAmount;
     R.flash[2] = this.flashColor[2] * this.flashAmount;
 
-    // Starfield
-    for (const st of this.stars) {
-      const tw = 0.62 + 0.38 * Math.sin(time * st.sp + st.tw);
-      R.glow(st.x, st.y, st.r * 2.6, 0.55, 0.72, 1.0, st.a * tw * 0.5, 2.2);
-    }
-
-    this.renderGrid(time);
-
-    // Range indicator
-    R.ring(this.cx, this.cy, s.range, 1.2, 0.16, 0.42, 0.62, 0.32);
-
+    this.renderBackdrop(time);
+    this.renderDebris();
+    this.renderPickups(time);
     this.renderEnemies(time);
     this.renderBullets();
     this.renderParticles();
     this.renderAbilityFX(time);
-    this.renderTower(time, run, s);
+    this.renderShip(time, run, s);
 
-    R.flush();
+    R.flush(this.sector.bg);
   }
 
-  renderGrid(time) {
+  renderBackdrop(time) {
     const R = this.renderer;
-    const pulse = 0.5 + 0.5 * Math.sin(time * 0.5);
-    // Concentric rings receding from the bastion give a sense of scale and make
-    // enemy approach speed readable. Spacing follows the field so the grid
-    // reaches the edge on a monitor without crowding a phone.
-    const reach = Math.max(this.spawnRX, this.spawnRY);
-    const rings = 5;
-    for (let i = 1; i <= rings; i++) {
-      const r = (reach / rings) * i + Math.sin(time * 0.35 + i) * 4;
-      R.ring(this.cx, this.cy, r, 0.7, 0.12, 0.28, 0.5, 0.2 + pulse * 0.06);
+    const haze = this.sector.haze;
+    const tint = this.sector.starTint;
+
+    for (const n of this.nebulae) {
+      R.glow(n.x, n.y, n.r, haze[0], haze[1], haze[2], n.a, 2.6);
     }
-    const spokes = 12;
-    for (let i = 0; i < spokes; i++) {
-      const a = (i / spokes) * TAU + time * 0.03;
-      const r0 = 60, r1 = reach;
-      R.beam(this.cx + Math.cos(a) * r0, this.cy + Math.sin(a) * r0,
-        this.cx + Math.cos(a) * r1, this.cy + Math.sin(a) * r1,
-        0.7, 0.10, 0.24, 0.44, 0.16, 1);
+    for (const layer of this.layers) {
+      for (const st of layer.stars) {
+        // Near stars streak with the motion; far ones stay points. Cheap, and
+        // it is most of what sells forward flight.
+        if (layer.depth > 0.9) {
+          R.push(5, st.x, st.y, st.r * 0.9, st.r * 5.5, 0,
+            tint[0], tint[1], tint[2], st.a, 0, 0);
+        } else {
+          R.glow(st.x, st.y, st.r * 2.4, tint[0], tint[1], tint[2], st.a * 0.6, 2.2);
+        }
+      }
+    }
+
+    if (this.storm) {
+      const k = this.storm.t / 0.55;
+      const y = this.storm.y;
+      let px = this.x0;
+      let py = y;
+      for (let i = 1; i <= 14; i++) {
+        const nx = this.x0 + (this.fieldW / 14) * i;
+        const ny = y + Math.sin(i * 2.7 + this.storm.seed) * 34;
+        R.beam(px, py, nx, ny, 3.2 * k, 0.6, 0.9, 1.8, k, 0.8);
+        R.beam(px, py, nx, ny, 1.1 * k, 1.7, 1.9, 2.0, k, 0.5);
+        px = nx; py = ny;
+      }
+      R.glow(this.cx, y, this.fieldW * 0.6, 0.4, 0.7, 1.5, k * 0.18, 2.2);
+    }
+  }
+
+  renderDebris() {
+    const R = this.renderer;
+    const c = COLORS.debris;
+    for (const d of this.debris.items) {
+      if (!d.active) continue;
+      const hit = d.flash > 0 ? 1.6 : 0;
+      const frac = d.maxHp ? Math.max(0, d.hp / d.maxHp) : 1;
+      R.glow(d.x, d.y, d.r * 2.1, c[0] + hit, c[1] + hit, c[2] + hit, 0.16, 2.2);
+      R.poly(d.x, d.y, d.r, d.sides, d.angle, c[0] + hit, c[1] + hit, c[2] + hit, 0.9);
+      if (frac < 0.999) {
+        R.ring(d.x, d.y, d.r + 5, 1.2 * frac, 1.4, 0.7, 0.3, 0.6);
+      }
+      R.ring(d.x, d.y, d.r * 0.55, 1.2, c[0] * 1.3, c[1] * 1.3, c[2] * 1.4, 0.3);
+    }
+  }
+
+  renderPickups(time) {
+    const R = this.renderer;
+    for (const p of this.pickups.items) {
+      if (!p.active) continue;
+      const fade = p.life < 1.5 ? Math.max(0, p.life / 1.5) : 1;
+      const blink = p.life < 1.5 && Math.sin(time * 22) < 0 ? 0.3 : 1;
+      if (p.kind === 'coin') {
+        const c = COLORS.coin;
+        R.glow(p.x, p.y, 15, c[0], c[1], c[2], 0.55 * fade * blink, 1.8);
+        R.poly(p.x, p.y, 6.2, 6, p.angle, c[0], c[1], c[2], fade * blink);
+      } else {
+        const c = COLORS.repair;
+        R.glow(p.x, p.y, 22, c[0], c[1], c[2], 0.6 * fade, 1.7);
+        R.beam(p.x - 7, p.y, p.x + 7, p.y, 2.6, c[0], c[1], c[2], fade, 0.6);
+        R.beam(p.x, p.y - 7, p.x, p.y + 7, 2.6, c[0], c[1], c[2], fade, 0.6);
+      }
     }
   }
 
   renderEnemies(time) {
     const R = this.renderer;
-    const items = this.enemies.items;
-    for (let i = 0; i < items.length; i++) {
-      const e = items[i];
+    for (const e of this.enemies.items) {
       if (!e.active) continue;
       let [r, g, b] = e.color;
       let alpha = 1;
 
-      if (e.phase) {
-        const ph = Math.sin(e.phaseT);
-        alpha = ph > 0.55 ? 0.22 : 0.85;
-      }
+      if (e.phase) alpha = Math.sin(e.phaseT) > 0.55 ? 0.22 : 0.85;
       if (e.hitFlash > 0) {
+        // Additive, not a wash: enough to register a hit, not so much that a
+        // constantly-shot enemy is permanently white.
         const f = e.hitFlash / 0.12;
-        r += 1.8 * f; g += 1.8 * f; b += 1.8 * f;
+        r += 0.9 * f; g += 0.9 * f; b += 0.9 * f;
       }
       if (this.enrage > 0) {
         const k = Math.min(1.4, this.enrage * 0.7);
@@ -892,16 +1445,18 @@ export class Game {
       }
 
       const hpFrac = Math.max(0, e.hp / e.maxHp);
-      R.glow(e.x, e.y, e.radius * 3.1, r, g, b, 0.30 * alpha, 2.0);
+      R.glow(e.x, e.y, e.radius * 2.7, r, g, b, 0.24 * alpha, 2.1);
       R.poly(e.x, e.y, e.radius, e.sides, e.angle, r, g, b, alpha);
 
+      if (e.stun > 0) {
+        R.ring(e.x, e.y, e.radius + 7 + Math.sin(time * 20) * 2, 1.6, 0.5, 0.9, 1.9, 0.8);
+      }
       if (e.shield > 0) {
         const f = e.shield / e.maxShield;
         R.ring(e.x, e.y, e.radius + 5, 1.4, 0.4, 0.8, 1.6, 0.5 + f * 0.4);
       }
       if (e.boss) {
         R.ring(e.x, e.y, e.radius + 11 + Math.sin(time * 4) * 2, 2.2, 1.6, 0.25, 0.35, 0.85);
-        // Boss health arc
         R.ring(e.x, e.y, e.radius + 18, 3.0, 1.5, 0.4, 0.2, 0.25);
         R.ring(e.x, e.y, e.radius + 18, 3.0 * hpFrac, 1.6, 0.5, 0.2, 0.9);
       } else if (hpFrac < 0.999) {
@@ -912,12 +1467,10 @@ export class Game {
 
   renderBullets() {
     const R = this.renderer;
-    const items = this.bullets.items;
-    for (let i = 0; i < items.length; i++) {
-      const b = items[i];
+    for (const b of this.bullets.items) {
       if (!b.active) continue;
       const c = b.fromEnemy ? [1.5, 0.5, 0.25] : (b.crit ? [1.6, 1.3, 0.5] : COLORS.bullet);
-      const tail = 0.028;
+      const tail = 0.026;
       R.beam(b.x - b.vx * tail, b.y - b.vy * tail, b.x, b.y, b.radius * 1.5,
         c[0], c[1], c[2], 0.85, 0.9);
       R.glow(b.x, b.y, b.radius * 4.2, c[0], c[1], c[2], 0.6, 1.8);
@@ -926,13 +1479,10 @@ export class Game {
 
   renderParticles() {
     const R = this.renderer;
-    const items = this.particles.items;
-    for (let i = 0; i < items.length; i++) {
-      const p = items[i];
+    for (const p of this.particles.items) {
       if (!p.active) continue;
       const t = p.life / p.maxLife;
       if (p.kind === 3) {
-        // Expanding shockwave ring
         const rr = p.size * (1 - t) + 8;
         R.ring(p.x, p.y, rr, 3 * t + 1, p.r, p.g, p.b, t * 0.8);
       } else if (p.kind === 2) {
@@ -957,64 +1507,59 @@ export class Game {
       R.glow(s.x, s.y, 150 * pulse, 0.55, 0.25, 1.2, 0.55, 1.4);
       R.disc(s.x, s.y, 22 * pulse, 0.05, 0.02, 0.12, 1);
       for (let i = 0; i < 4; i++) {
-        R.ring(s.x, s.y, 34 + i * 22 + Math.sin(time * 5 - i) * 6, 1.6,
-          0.7, 0.4, 1.5, 0.5 - i * 0.09);
+        R.ring(s.x, s.y, 34 + i * 22 + Math.sin(time * 5 - i) * 6, 1.6, 0.7, 0.4, 1.5, 0.5 - i * 0.09);
       }
     }
     if (this.lance && this.lance.t > 0) {
-      const a = this.lance.angle;
-      const len = Math.hypot(this.w, this.h);
-      R.beam(this.cx, this.cy, this.cx + Math.cos(a) * len, this.cy + Math.sin(a) * len,
-        13, 1.6, 0.35, 0.6, 0.9, 0.85);
-      R.beam(this.cx, this.cy, this.cx + Math.cos(a) * len, this.cy + Math.sin(a) * len,
-        4, 1.8, 1.4, 1.6, 1, 0.6);
+      const x = this.ship.x;
+      R.beam(x, this.y0 - 30, x, this.ship.y - 20, 15, 1.6, 0.35, 0.6, 0.9, 0.85);
+      R.beam(x, this.y0 - 30, x, this.ship.y - 20, 5, 1.8, 1.4, 1.6, 1, 0.6);
     }
     if (this.buffs.aegis > 0) {
       const p = 1 + Math.sin(time * 7) * 0.06;
-      R.ring(this.cx, this.cy, 112 * p, 3.5, 0.35, 1.5, 0.85, 0.75);
-      R.glow(this.cx, this.cy, 150, 0.25, 1.1, 0.6, 0.28, 2);
+      R.ring(this.ship.x, this.ship.y, 60 * p, 3.2, 0.35, 1.5, 0.85, 0.75);
+      R.glow(this.ship.x, this.ship.y, 90, 0.25, 1.1, 0.6, 0.28, 2);
     }
   }
 
-  renderTower(time, run, s) {
+  renderShip(time, run, s) {
     const R = this.renderer;
-    const cx = this.cx, cy = this.cy;
+    const ship = this.ship;
+    const x = ship.x, y = ship.y;
     const hullFrac = Math.max(0, run.hull / s.maxHull);
     const shieldFrac = s.maxShield > 0 ? run.shield / s.maxShield : 0;
     const over = this.buffs.overdrive > 0;
+    const c = over ? [1.5, 0.9, 0.25] : COLORS.ship;
+    const bank = ship.bank;
 
-    // Shield bubble
     if (shieldFrac > 0.01) {
-      R.ring(cx, cy, 52 + Math.sin(time * 2.4) * 1.6, 2.2,
-        COLORS.shield[0], COLORS.shield[1], COLORS.shield[2], 0.28 + shieldFrac * 0.45);
-      R.glow(cx, cy, 66, COLORS.shield[0], COLORS.shield[1], COLORS.shield[2], shieldFrac * 0.18, 2.4);
+      R.ring(x, y, 30 + Math.sin(time * 2.4) * 1.4, 2.0,
+        COLORS.shield[0], COLORS.shield[1], COLORS.shield[2], 0.25 + shieldFrac * 0.45);
+      R.glow(x, y, 44, COLORS.shield[0], COLORS.shield[1], COLORS.shield[2], shieldFrac * 0.18, 2.4);
     }
 
-    // Rotating outer housing
-    const tc = over ? [1.5, 0.9, 0.25] : COLORS.tower;
-    R.ring(cx, cy, 36, 2.4, tc[0], tc[1], tc[2], 0.75);
-    for (let i = 0; i < 3; i++) {
-      const a = time * 0.6 + (i / 3) * TAU;
-      R.poly(cx + Math.cos(a) * 36, cy + Math.sin(a) * 36, 5.5, 3, a, tc[0], tc[1], tc[2], 0.9);
-    }
+    // Engine plume, brighter under thrust.
+    const plume = ship.thrust;
+    R.glow(x - bank * 6, y + 20, 20 * plume, c[0], c[1], c[2], 0.55, 1.6);
+    R.spark(x - bank * 6, y + 24, 5, 16 * plume, Math.PI / 2, c[0], c[1], c[2], 0.75);
 
-    // Core, brightness tracking hull integrity
-    const beat = 1 + Math.sin(time * 3.2) * 0.05;
-    R.glow(cx, cy, 74 * beat, tc[0], tc[1], tc[2], 0.42 * (0.45 + hullFrac * 0.55), 1.7);
-    R.disc(cx, cy, 21 * beat, tc[0] * (0.5 + hullFrac), tc[1] * (0.5 + hullFrac), tc[2] * (0.5 + hullFrac), 1);
-    R.disc(cx, cy, 11, 1.7, 1.9, 2.0, 1);
+    // Wings, swept back and rolling with the bank.
+    R.beam(x - 20, y + 8, x - 4, y - 6, 4.2, c[0], c[1], c[2], 0.95, 0.55);
+    R.beam(x + 20, y + 8, x + 4, y - 6, 4.2, c[0], c[1], c[2], 0.95, 0.55);
 
-    // Barrel pointing at the current target
-    const a = this.turretAngle;
-    R.beam(cx + Math.cos(a) * 16, cy + Math.sin(a) * 16,
-      cx + Math.cos(a) * 40, cy + Math.sin(a) * 40, 5.5, tc[0], tc[1], tc[2], 0.95, 0.5);
+    // Hull. Brightness tracks integrity so a hurt ship visibly dims.
+    const lit = 0.45 + hullFrac * 0.55;
+    R.glow(x, y, 40, c[0], c[1], c[2], 0.4 * lit, 1.7);
+    R.poly(x, y, 15, 3, -Math.PI / 2 + bank * 0.28, c[0] * lit, c[1] * lit, c[2] * lit, 1);
+    R.disc(x, y + 2, 5.5, 1.7, 1.9, 2.0, 1);
 
-    // Orbiting escort drones
     for (let i = 0; i < s.drones; i++) {
-      const da = this.droneAngle + (i / s.drones) * TAU;
-      const dx = cx + Math.cos(da) * 74, dy = cy + Math.sin(da) * 74;
-      R.glow(dx, dy, 16, tc[0], tc[1], tc[2], 0.5, 1.8);
-      R.poly(dx, dy, 6, 3, da * 3, tc[0], tc[1], tc[2], 1);
+      const side = i % 2 === 0 ? -1 : 1;
+      const rank = Math.floor(i / 2);
+      const wx = x + side * (34 + rank * 24);
+      const wy = y + 12 + rank * 16 + Math.sin(this.wingAngle * 2 + i) * 3;
+      R.glow(wx, wy, 15, c[0], c[1], c[2], 0.5, 1.8);
+      R.poly(wx, wy, 6, 3, -Math.PI / 2, c[0], c[1], c[2], 1);
     }
   }
 
@@ -1044,7 +1589,7 @@ export class Game {
 function fmtShort(n) {
   if (n < 1000) return String(Math.round(n));
   const units = ['K', 'M', 'B', 'T', 'aa', 'ab', 'ac', 'ad', 'ae', 'af'];
-  let tier = Math.floor(Math.log10(n) / 3);
+  const tier = Math.floor(Math.log10(n) / 3);
   if (tier > units.length) return n.toExponential(1);
   const v = n / Math.pow(1000, tier);
   return (v < 10 ? v.toFixed(1) : Math.round(v)) + units[tier - 1];

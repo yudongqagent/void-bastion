@@ -145,8 +145,9 @@ export const UPGRADES = {
   thorns:      { tab: 'defense', name: 'Reactive Spikes', desc: 'Damage reflected on contact',base: 160,  growth: 1.17,  add: 0.22,  fmt: 'mult' },
 
   coinBonus:   { tab: 'utility', name: 'Salvage Rig',     desc: 'Coins from every source',    base: 150,  growth: 1.20,  add: 0.075, fmt: 'pctBonus' },
-  slowField:   { tab: 'utility', name: 'Grav Well',       desc: 'Enemy speed reduction',      base: 190,  growth: 1.21,  add: 0.016, fmt: 'pct', cap: 0.60, maxLevel: 37 },
-  drones:      { tab: 'utility', name: 'Escort Drones',   desc: 'Orbiting auto-turrets',      base: 900,  growth: 1.55,  add: 1,     fmt: 'int', cap: 6, maxLevel: 6 },
+  magnet:      { tab: 'utility', name: 'Tractor Field',   desc: 'Pickup collection radius',   base: 150,  growth: 1.19,  add: 11,    fmt: 'flat', maxLevel: 34 },
+  evasion:     { tab: 'utility', name: 'Thruster Vanes',  desc: 'Autopilot dodge speed',      base: 240,  growth: 1.23,  add: 0.05,  fmt: 'mult', maxLevel: 20 },
+  drones:      { tab: 'utility', name: 'Escort Wingmen',  desc: 'Wingmen flying in formation',base: 900,  growth: 1.55,  add: 1,     fmt: 'int', cap: 6, maxLevel: 6 },
   lifesteal:   { tab: 'utility', name: 'Siphon Core',     desc: 'Hull restored per kill',     base: 260,  growth: 1.185, add: 0.9,   fmt: 'flat' },
 };
 
@@ -277,7 +278,16 @@ export const ABILITIES = {
 //
 // "drift" is tail-half mean wave gain over head-half mean wave gain. Anything
 // in roughly 0.9–1.6 feels like healthy infinite progression.
-export const TUNING = { CORE_BASE: 1.016, CORE_SCALE: 0.42 };
+export const TUNING = {
+  CORE_BASE: 1.016,
+  CORE_SCALE: 0.42,
+  // Ramming is the swarm's primary attack, so a single bump has to chip rather
+  // than cripple. enemyDamage() is sized for a stationary tower that took a
+  // handful of hits per wave; a moving ship gets bumped constantly, and at full
+  // value nine contacts ended a run. Scaled here rather than in enemyDamage()
+  // because sentinel fire and debris still use the unscaled figure.
+  CONTACT_SCALE: 0.60,
+};
 
 /** Cores awarded for a run that reached `maxWave`. */
 export function coresForRun(maxWave, coreYieldLevel = 0) {
@@ -334,7 +344,11 @@ export function deriveStats(up, lab, prestigeCount) {
     armor:       Math.min(U.armor.cap, U.armor.add * lv('armor')),
     thorns:      U.thorns.add * lv('thorns'),
     coinMult:    coinMult * (1 + U.coinBonus.add * lv('coinBonus')),
-    slowField:   Math.min(U.slowField.cap, U.slowField.add * lv('slowField')),
+    // Pickups have to be flown over to be collected, so magnet radius is a
+    // real economy stat, not a convenience: without it, loot drifts off-screen.
+    magnet:      92 + U.magnet.add * lv('magnet'),
+    // Multiplier on the autopilot's top speed and threat-reaction distance.
+    evasion:     1 + U.evasion.add * lv('evasion'),
     drones:      Math.min(U.drones.cap, lv('drones')),
     lifesteal:   U.lifesteal.add * lv('lifesteal'),
   };

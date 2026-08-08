@@ -94,6 +94,10 @@ function handleEvents() {
       case 'bossKill':
         ui.toast('BOSS DESTROYED', 'gold');
         break;
+      case 'sector':
+        ui.toast(`ZONE ${ev.data.index} — ${ev.data.sector.name}`, 'violet', true);
+        ui.setZone(ev.data.sector);
+        break;
       case 'milestone':
         ui.toast(`MILESTONE — WAVE ${ev.data.wave}`, 'gold', true);
         break;
@@ -164,6 +168,7 @@ if (hadSave) {
   state.meta.seenIntro = true;
   setTimeout(() => ui.showModal('modalHelp'), 350);
 }
+ui.setZone(game.sector);
 ui.updateSpeedButton();
 ui.soundBtn.classList.toggle('off', state.meta.settings.sound === false);
 if (state.run.over) ui.showRunOver();

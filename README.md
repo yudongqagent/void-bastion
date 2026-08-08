@@ -1,7 +1,11 @@
 # ⬡ VOID BASTION
 
-An infinite sci-fi idle tower defence for the browser. One bastion, an endless
-machine swarm, and an upgrade tree that never stops paying out.
+An infinite sci-fi idle shoot-'em-up for the browser. One ship flying forward
+forever, an endless machine swarm, and an upgrade tree that never stops paying
+out.
+
+You never steer and you never aim. The guns fire themselves, the autopilot
+dodges, hull and shields regenerate. Your only job is deciding what to buy.
 
 **Play:** https://yudongqagent.github.io/void-bastion/
 
@@ -12,8 +16,9 @@ a hand-written WebGL2 renderer, served as static files.
 
 ## The loop
 
-You never aim and you never place towers. The bastion at the centre of the
-screen fires on its own; your job is deciding what to buy and when to walk away.
+The ship holds station near the bottom of the screen while the world streams
+down past it. The swarm enters from the top and mostly kills itself against your
+guns trying to ram you; kills scatter coins you have to fly over to collect.
 
 | | |
 |---|---|
@@ -26,9 +31,22 @@ wall. That is the pacing mechanism, not a failure state — you ascend, convert
 the depth you reached into Cores, and the next run starts stronger than the last
 one ever was.
 
-Every 10th wave is a boss. Every 25th pays a milestone bonus. Abilities unlock
-in the Lab and fire from the bottom bar or the <kbd>1</kbd>–<kbd>5</kbd> keys.
-Progress saves to `localStorage` automatically.
+Every 10th wave is a boss, and each boss opens a new **zone** — a fresh palette,
+backdrop, scroll speed, hazard mix and one rule twist, cycling forever so wave
+300 never looks like wave 30. Every 25th wave pays a milestone bonus. Abilities
+unlock in the Lab and fire from the bottom bar or the <kbd>1</kbd>–<kbd>5</kbd>
+keys. Progress saves to `localStorage` automatically.
+
+### The autopilot
+
+The steering behaviour is the heart of "fun to watch". Four weighted urges are
+summed each frame and clamped: break away from anything about to hit, sidestep
+incoming fire, drift toward loose loot, and hold station in the lower band.
+
+It is deliberately imperfect. A pilot that never takes a hit removes all tension
+and makes hull, shields and armour pointless to buy, so the threat radius is
+short and the acceleration finite — it dodges what it can and wears what it
+cannot. Thruster Vanes raises both, so evasion is a real upgrade axis.
 
 ---
 
@@ -44,6 +62,7 @@ harness.
 enemy HP     9 · w^1.75 · 1.036^w      polynomial early, exponential forever after
 enemy count  5 + 2.4·√w + 0.14w        sqrt-led so the screen stays readable
 enemy speed  min(78, 24 + 11·log₁₀w)   near-flat: fast stops being "hard" and starts being unreadable
+contact      enemyDamage · 0.60         ramming chips rather than cripples — a moving ship gets bumped a lot
 coin drop    2.2 · HP^0.55             deliberately sub-linear in HP
 upgrade cost base · growth^level       ~1.13–1.34 depending on the stat
 cores earned 0.42 · 1.016^w · w^0.9    exponential, mirroring enemy HP
@@ -88,15 +107,29 @@ rather than by guessing:
 | 1.024+ | runaway; the player outruns the curve entirely |
 
 Measured over 24 simulated prestiges: first run ends ~wave 57, run 24 ends
-~wave 498, with no plateau and no runaway.
+~wave 498, with no plateau and no runaway. Because the autopilot makes
+survivability an emergent property of the steering code rather than something
+`balance.js` can predict, actual run depth is measured, not assumed —
+`tools/headless.mjs --natural` plays unaided runs to death and reports the
+distribution. Current median for run 1 is **wave 60** across trials.
 
 ### Anti-stall
 
-Sentinels hold at range and shoot instead of closing, so a bastion with strong
-regen but not enough damage could sit in one wave indefinitely — neither winning
-nor dying. After 100 seconds in a single wave the survivors **enrage**: they
-speed up and hit harder without limit, and Sentinels abandon the standoff and
-charge. The standoff always resolves.
+Sentinels hover and shoot instead of closing, so a ship with strong regen but
+not enough damage could sit in one wave indefinitely — neither winning nor
+dying. After 100 seconds in a single wave the survivors **enrage**: faster and
+hitting harder, without limit. The standoff always resolves.
+
+### A bug worth recording
+
+Zone debris used to spawn at ~28 rocks a minute and dealt full unscaled
+`enemyDamage` on collision. Unaided runs died on **wave 16**, always inside the
+Asteroid Belt — the exact "hard-counter an idle player" case the zone design
+rules out. Rocks are now shootable (they drop ore, which is what makes the Belt
+worth its coin bonus), spawn far more slowly, and their collision damage is
+scaled like any other contact. Median run depth went 16 → 60 from that one fix.
+The lesson: sweeping `CONTACT_SCALE` first showed almost no effect, because
+ramming was never the thing killing the ship.
 
 ---
 
@@ -110,6 +143,10 @@ function in the fragment shader — circle, ring, regular n-gon, beam, spark. No
 textures, no sprite atlas, no image assets anywhere in the repo. The entire
 frame is a single `drawArraysInstanced` call regardless of how many hundreds of
 enemies, bullets and particles are on screen.
+
+Forward motion is sold entirely by three parallax star layers whose depth drives
+both speed and brightness, with the nearest layer drawn as streaks rather than
+points.
 
 Colours are written to an `RGBA16F` target with values deliberately **above
 1.0**. A bright-pass, two separable gaussian blurs at half and quarter
@@ -140,7 +177,8 @@ css/ui.css            holographic UI, mobile-first
 js/main.js            boot, main loop, event wiring
 js/gl/renderer.js     WebGL2 instanced SDF renderer + bloom
 js/game/balance.js    every tunable number; imported by the harnesses
-js/game/game.js       simulation: entities, waves, combat, abilities
+js/game/game.js       simulation: ship, autopilot, waves, combat, loot
+js/game/sectors.js    zone table — palette, hazards and rule twists
 js/game/state.js      save/load, run vs. meta split
 js/ui/hud.js          DOM layer
 js/audio/synth.js     procedural WebAudio
@@ -177,7 +215,12 @@ catches stalls, NaN leaks and exhausted pools that a balance model cannot:
 node tools/headless.mjs --waves 40
 ```
 
-It exits non-zero on failure.
+It exits non-zero on failure. To measure how deep an unaided run actually gets
+(the keep-alive is disabled, so the ship dies for real):
+
+```bash
+node tools/headless.mjs --waves 400 --natural
+```
 
 ---
 

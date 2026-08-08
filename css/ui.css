@@ -20,7 +20,7 @@
   --safe-t:    env(safe-area-inset-top, 0px);
   /* The upgrade panel is permanent furniture, not a popup. Its height is a
      variable because both the panel and the ability row above it depend on it. */
-  --panel-h: clamp(206px, 42vh, 400px);
+  --panel-h: clamp(184px, 34vh, 330px);
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -98,6 +98,16 @@ html, body {
 }
 .stat-label { color: var(--text-dim); font-size: 10px; }
 .stat.wave strong { color: var(--cyan); text-shadow: 0 0 12px rgba(77,240,255,0.6); }
+.zone {
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  color: var(--violet);
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 116px;
+}
 .stat.coins { margin-left: auto; }
 .stat.coins strong { color: var(--gold); text-shadow: 0 0 12px rgba(255,201,77,0.45); }
 .stat.cores strong { color: var(--violet); text-shadow: 0 0 12px rgba(176,107,255,0.45); }

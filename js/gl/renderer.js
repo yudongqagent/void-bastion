@@ -103,8 +103,11 @@ void main() {
     float d = sdPoly(p, sides);
     alpha = edge(d);
     // Hollow-core look: bright edge, dimmer middle. Reads as a wireframe hull.
+    // The rim boost is deliberately modest — at 2.1x a small enemy's edge is
+    // most of its area, so it clipped to white and every archetype looked the
+    // same colour once the additive glow was stacked on top.
     float rim = smoothstep(-0.42, -0.02, d);
-    rgb *= 0.42 + 2.1 * rim;
+    rgb *= 0.60 + 1.15 * rim;
   } else if (v_shape == 4) {                // BEAM
     float ax = abs(p.x), ay = abs(p.y);
     float soft = clamp(v_param.x, 0.02, 1.0);
