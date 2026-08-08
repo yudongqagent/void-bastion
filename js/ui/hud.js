@@ -173,7 +173,8 @@ export class UI {
     const px = (el) => (el ? el.getBoundingClientRect().height : 0);
     const top = px(document.getElementById('hud'));
     if (this.isDesktop()) {
-      this.game.setInsets(top, this.drawer.getBoundingClientRect().width || 330, 0);
+      this.game.setInsets(top, this.drawer.getBoundingClientRect().width || 330,
+        px(this.abilities) + 34);
     } else if (this.drawerOpen) {
       this.game.setInsets(top, 0, this.drawer.getBoundingClientRect().height);
     } else {
