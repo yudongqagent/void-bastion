@@ -6,7 +6,7 @@ import { Game } from './game/game.js';
 import { GameState, freshRun } from './game/state.js';
 import { Synth } from './audio/synth.js';
 import { UI } from './ui/hud.js';
-import { coresForRun, fmt } from './game/balance.js';
+import { fmt } from './game/balance.js';
 
 const sceneCanvas = document.getElementById('scene');
 const overlayCanvas = document.getElementById('overlay');
@@ -112,15 +112,16 @@ function handleEvents() {
 
 // --- run lifecycle ---------------------------------------------------------------
 
-function ascend(fromDeath) {
-  const { run, meta } = state;
-  const cores = coresForRun(run.wave, meta.lab.labCoreYield || 0);
-  meta.cores += cores;
-  meta.prestiges++;
-  meta.totalRuns++;
-  if (run.wave > meta.bestWave) meta.bestWave = run.wave;
+/**
+ * End the current run and begin a fresh one.
+ *
+ * Banking is idempotent and already happened at the moment of death, so this is
+ * safe on both paths: REBUILD after losing, and a voluntary ASCEND.
+ */
+function startNewRun(fromDeath) {
+  const cores = state.bankRun();
 
-  state.run = freshRun(meta);
+  state.run = freshRun(state.meta);
   game.markStatsDirty();
 
   // Clear the battlefield so the new run does not inherit the old swarm.
@@ -139,16 +140,17 @@ function ascend(fromDeath) {
   game.paused = false;
 
   state.save();
-  ui.hideModal();
+  ui.forceHideModal();
   ui.buildUpgradeRows();
   ui.buildAbilityBar();
+  ui.syncInsets();
   synth.prestige();
-  ui.toast(`ASCENDED — +${fmt(cores)} CORES`, 'violet', true);
+  if (cores > 0) ui.toast(`ASCENDED — +${fmt(cores)} CORES`, 'violet', true);
   if (!fromDeath) game.flash([0.3, 0.2, 0.6], 0.9);
 }
 
-document.getElementById('confirmAscend').addEventListener('click', () => ascend(false));
-document.getElementById('rebuildBtn').addEventListener('click', () => ascend(true));
+document.getElementById('confirmAscend').addEventListener('click', () => startNewRun(false));
+document.getElementById('rebuildBtn').addEventListener('click', () => startNewRun(true));
 
 // --- offline earnings -------------------------------------------------------------
 

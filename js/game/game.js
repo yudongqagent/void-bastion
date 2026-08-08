@@ -439,13 +439,16 @@ export class Game {
   }
 
   endRun() {
-    this.state.run.over = true;
-    this.state.run.hull = 0;
+    const run = this.state.run;
+    run.over = true;
+    run.hull = 0;
+    // Pay out BEFORE anything else can happen. bankRun() saves, so even a tab
+    // that dies right here keeps the Cores.
+    const cores = this.state.bankRun();
     this.synth.death();
     this.shake(34);
     this.flash([0.55, 0.1, 0.15], 1.1);
-    this.emit('runOver', { wave: this.state.run.wave });
-    this.state.save();
+    this.emit('runOver', { wave: run.wave, cores });
   }
 
   // --- abilities --------------------------------------------------------------

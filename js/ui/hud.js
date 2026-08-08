@@ -48,16 +48,13 @@ export class UI {
     this.rows = new Map();       // upgrade key -> {el, cost, lv, val, qty}
     this.abilityEls = new Map();
     this.openModal = null;
-    this.lastAffordCount = -1;
-    this.drawerOpen = false;
 
     this.$ = (id) => document.getElementById(id);
     this.cache();
     this.bind();
     this.buildUpgradeRows();
     this.buildAbilityBar();
-    // On a wide screen the drawer is a permanent column, so start it open.
-    if (this.isDesktop()) this.setDrawer(true); else this.syncInsets();
+    this.syncInsets();
   }
 
   isDesktop() {
@@ -67,7 +64,7 @@ export class UI {
   cache() {
     for (const id of ['waveNum', 'coinNum', 'coreNum', 'hullFill', 'hullText',
       'shieldBar', 'shieldFill', 'shieldText', 'bossTag', 'upgradeList', 'drawer',
-      'drawerToggle', 'affordBadge', 'abilities', 'modalRoot', 'toasts',
+      'abilities', 'modalRoot', 'toasts',
       'speedBtn', 'soundBtn', 'labList', 'abilityShop', 'labCores', 'menuStats']) {
       this[id] = this.$(id);
     }
@@ -79,9 +76,6 @@ export class UI {
       this.synth.click();
       fn(e);
     });
-
-    click(this.drawerToggle, () => this.setDrawer(!this.drawerOpen));
-    this.$('drawerGrip').addEventListener('click', () => this.setDrawer(false));
 
     this.$('tabs').addEventListener('click', (e) => {
       const b = e.target.closest('.tab');
@@ -98,7 +92,7 @@ export class UI {
       this.synth.click();
       this.qty = b.dataset.qty === 'max' ? 'max' : Number(b.dataset.qty);
       for (const q of b.parentElement.querySelectorAll('.qty')) q.classList.toggle('active', q === b);
-      this.refreshUpgrades(true);
+      this.refreshUpgrades();
     });
 
     this.upgradeList.addEventListener('click', (e) => {
@@ -117,7 +111,7 @@ export class UI {
     click(this.$('menuLabBtn'), () => this.showModal('modalLab'));
     click(this.$('menuAscendBtn'), () => this.showAscend());
     click(this.$('menuHelpBtn'), () => this.showModal('modalHelp'));
-    click(this.$('overLabBtn'), () => this.showModal('modalLab'));
+    click(this.$('overLabBtn'), () => this.showModal('modalLab', { returnTo: 'modalOver' }));
     click(this.$('wipeBtn'), () => this.confirmWipe());
 
     this.labList.addEventListener('click', (e) => {
@@ -135,52 +129,31 @@ export class UI {
       if (k >= '1' && k <= '5') {
         const key = Object.keys(ABILITIES)[Number(k) - 1];
         if (key) this.game.useAbility(key);
-      } else if (k === 'u') {
-        this.setDrawer(!this.drawerOpen);
       } else if (k === 'escape') {
-        if (this.openModal) this.hideModal(); else this.setDrawer(false);
+        if (this.openModal) this.hideModal();
       } else if (k === ' ') {
         e.preventDefault();
         this.cycleSpeed();
       }
     });
 
-    this._wasDesktop = this.isDesktop();
-    window.addEventListener('resize', () => {
-      const desktop = this.isDesktop();
-      // Only force the drawer when we actually cross the breakpoint. Otherwise
-      // rotating a phone, or the URL bar collapsing, would yank the sheet open
-      // or shut underneath the player mid-tap.
-      if (desktop !== this._wasDesktop) {
-        this._wasDesktop = desktop;
-        this.setDrawer(desktop);
-      } else {
-        this.syncInsets();
-      }
-    });
+    window.addEventListener('resize', () => this.syncInsets());
   }
 
-  setDrawer(open) {
-    this.drawerOpen = open;
-    this.drawer.classList.toggle('open', open);
-    this.drawerToggle.classList.toggle('open', open);
-    if (open) this.refreshUpgrades(true);
-    this.syncInsets();
-  }
-
-  /** Keep the battlefield centred in the part of the screen the UI isn't using. */
+  /**
+   * Keep the battlefield centred in the part of the screen the UI isn't using.
+   * The upgrade panel is permanent — a bottom sheet on phones, a right-hand
+   * column on desktop — so the world is always offset around it.
+   */
   syncInsets() {
     const px = (el) => (el ? el.getBoundingClientRect().height : 0);
     const top = px(document.getElementById('hud'));
     if (this.isDesktop()) {
       this.game.setInsets(top, this.drawer.getBoundingClientRect().width || 330,
         px(this.abilities) + 34);
-    } else if (this.drawerOpen) {
-      this.game.setInsets(top, 0, this.drawer.getBoundingClientRect().height);
     } else {
-      // Drawer shut: still keep clear of the ability row and the big UPGRADES button.
-      const bottom = Math.max(px(this.abilities), 0) + px(this.drawerToggle) + 22;
-      this.game.setInsets(top, 0, bottom);
+      this.game.setInsets(top, 0,
+        this.drawer.getBoundingClientRect().height + px(this.abilities) + 14);
     }
   }
 
@@ -214,7 +187,7 @@ export class UI {
       });
     }
     this.upgradeList.replaceChildren(frag);
-    this.refreshUpgrades(true);
+    this.refreshUpgrades();
   }
 
   /** How many levels a click would buy, and what that costs. */
@@ -231,8 +204,7 @@ export class UI {
     return { n, cost: upgradeBulkCost(key, lvl, n), lvl, max };
   }
 
-  refreshUpgrades(force = false) {
-    if (!this.drawerOpen && !force) return;
+  refreshUpgrades() {
     const { run } = this.state;
     const stats = this.game.stats;
     for (const [key, r] of this.rows) {
@@ -271,7 +243,7 @@ export class UI {
     if (key === 'maxHull') run.hull = Math.min(s.maxHull, run.hull + UPGRADES.maxHull.add * plan.n);
     if (key === 'shieldMax') run.shield = Math.min(s.maxShield, run.shield + UPGRADES.shieldMax.add * plan.n);
 
-    this.refreshUpgrades(true);
+    this.refreshUpgrades();
     this.game.addFloater(this.game.cx, this.game.cy + 46,
       UPGRADES[key].name.toUpperCase(), [0.4, 1.4, 1.6], 0.9);
   }
@@ -438,23 +410,8 @@ export class UI {
 
     this.refreshAbilities();
     this.refreshUpgrades();
-    this.refreshBadge();
   }
 
-  /** Count of upgrades you can afford right now — the "spend me" nudge. */
-  refreshBadge() {
-    if (this.isDesktop()) return;
-    let n = 0;
-    for (const key of Object.keys(UPGRADES)) {
-      const lvl = this.state.run.upgrades[key] || 0;
-      if (lvl >= upgradeMaxLevel(key)) continue;
-      if (this.state.run.coins >= upgradeCost(key, lvl)) n++;
-    }
-    if (n === this.lastAffordCount) return;
-    this.lastAffordCount = n;
-    this.affordBadge.hidden = n === 0;
-    this.affordBadge.textContent = n;
-  }
 
   // --- settings ------------------------------------------------------------------
 
@@ -484,20 +441,48 @@ export class UI {
 
   // --- modals -----------------------------------------------------------------
 
-  showModal(id) {
+  /**
+   * @param {string} id
+   * @param {{dismissible?: boolean, returnTo?: string|null}} [opts]
+   *   `dismissible: false` refuses backdrop taps and Escape — used for the
+   *   death screen, which must be answered rather than waved away.
+   *   `returnTo` sends the player back to that modal on close instead of to the
+   *   battlefield, so opening the Lab from the death screen is not a one-way trip.
+   */
+  showModal(id, opts = {}) {
     if (id === 'modalLab') this.buildLab();
     if (id === 'modalMenu') this.buildMenuStats();
     this.modalRoot.hidden = false;
     for (const m of this.modalRoot.querySelectorAll('.modal')) m.hidden = m.id !== id;
     this.openModal = id;
+    this.modalDismissible = opts.dismissible !== false;
+    this.modalReturnTo = opts.returnTo || null;
     this.game.paused = true;
   }
 
+  /** Close even a locked dialog — for the code paths that legitimately resolve it. */
+  forceHideModal() {
+    this._forceClose = true;
+    this.modalReturnTo = null;
+    this.hideModal();
+    this._forceClose = false;
+  }
+
   hideModal() {
+    if (!this.modalDismissible && !this._forceClose) return;
+
+    const back = this.modalReturnTo;
+    this.modalReturnTo = null;
+    if (back) { this.showModal(back, { dismissible: false }); return; }
+
+    // Backstop: a lost run has exactly one way out, and that is REBUILD. If
+    // anything closes the dialog while the bastion is dead, put it straight
+    // back rather than leaving the player staring at a frozen battlefield.
+    if (this.state.run.over && !this._forceClose) { this.showRunOver(); return; }
+
     this.modalRoot.hidden = true;
     this.openModal = null;
-    // A lost run stays paused — the only way out is Rebuild.
-    this.game.paused = this.state.run.over;
+    this.game.paused = false;
   }
 
   buildMenuStats() {
@@ -527,18 +512,21 @@ export class UI {
 
   showRunOver() {
     const { run, meta } = this.state;
-    const cores = coresForRun(run.wave, meta.lab.labCoreYield || 0);
+    // Already paid out by state.bankRun() the moment the bastion fell — this
+    // only reports it, so the number can never disagree with the wallet.
+    const cores = run.bankedCores || 0;
     this.$('overWave').textContent = run.wave;
     this.$('overKills').textContent = fmt(run.kills);
     this.$('overCores').textContent = fmt(cores);
     this.$('overHint').textContent = run.wave >= meta.bestWave
-      ? 'A new record. Spend these Cores in the Lab before the next sortie.'
-      : 'Every Core is permanent. Bank them, buy research, push deeper.';
-    this.showModal('modalOver');
+      ? 'A new record — Cores already banked. Spend them in the Lab before the next sortie.'
+      : 'Cores are banked and permanent. Buy research, then push deeper.';
+    this.showModal('modalOver', { dismissible: false });
   }
 
   confirmWipe() {
     if (!confirm('Erase all progress — Cores, research, records? This cannot be undone.')) return;
+    this._forceClose = true;
     this.state.reset();
     location.reload();
   }

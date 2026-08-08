@@ -4,7 +4,9 @@
 // `meta` is everything that survives forever. Only `meta` plus a light snapshot
 // of the current run is written to localStorage.
 
-import { LAB, ABILITIES, startingWave, startingCoins, labMult, deriveStats } from './balance.js';
+import {
+  LAB, ABILITIES, startingWave, startingCoins, labMult, deriveStats, coresForRun,
+} from './balance.js';
 
 const KEY = 'void-bastion:save:v1';
 const SAVE_INTERVAL_MS = 4000;
@@ -38,6 +40,8 @@ export function freshRun(meta) {
     elapsed: 0,
     cooldowns: {},        // ability key -> seconds remaining
     over: false,
+    banked: false,        // set once bankRun() has paid this run out
+    bankedCores: 0,
   };
 }
 
@@ -76,6 +80,29 @@ export class GameState {
   }
 
   markDirty() { this._dirty = true; }
+
+  /**
+   * Cash the current run in for permanent Cores.
+   *
+   * Idempotent, and called the instant the bastion dies rather than when the
+   * player presses REBUILD. That ordering matters: paying out on the button
+   * meant any other way of leaving the death screen — tapping the backdrop,
+   * Escape, opening the Lab, or just reloading the tab — silently threw the
+   * whole run's reward away.
+   */
+  bankRun() {
+    const { run, meta } = this;
+    if (run.banked) return 0;
+    run.banked = true;
+    const cores = coresForRun(run.wave, meta.lab.labCoreYield || 0);
+    meta.cores += cores;
+    meta.prestiges++;
+    meta.totalRuns++;
+    if (run.wave > meta.bestWave) meta.bestWave = run.wave;
+    run.bankedCores = cores;
+    this.save();
+    return cores;
+  }
 
   /** Throttled autosave; call every frame, it decides when to actually write. */
   tickSave(now) {
