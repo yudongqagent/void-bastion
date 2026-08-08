@@ -22,7 +22,7 @@
 import {
   enemyHP, enemyCount, enemySpeed, enemyDamage, coinValue, waveClearBonus,
   spawnWindow, isBossWave, bossStats, spawnTable, ABILITIES, deriveStats,
-  BOSS_INTERVAL, TUNING, WEAPONS, ELITE, eliteChance,
+  BOSS_INTERVAL, TUNING, WEAPONS, ELITE, eliteChance, eliteWeapon, SYSTEM,
 } from './balance.js';
 import { sectorForWave, sectorNumber, isSectorStart } from './sectors.js';
 
@@ -45,6 +45,10 @@ const SHIP_BAND = 0.20;
 // the same factor — so this is a pure density/readability change that leaves
 // balance.js's tuning, and therefore the whole prestige curve, untouched.
 const SWARM_DENSITY = 2.1;
+
+// Archetypes that hold station and shoot rather than closing to ram. An elite
+// Drone that gained a gun still charges you — it just shoots on the way in.
+const ARTILLERY = new Set(['sentinel', 'gunship', 'radial', 'lancer', 'dread']);
 
 // How far off straight-up the guns may swing. Wide enough to cover the lane,
 // narrow enough that the ship never looks like it is shooting sideways.
@@ -106,7 +110,7 @@ const newEnemy = () => ({
 const newBullet = () => ({
   active: false, x: 0, y: 0, vx: 0, vy: 0, dmg: 0, pierce: 1, life: 0,
   crit: false, radius: 3, hits: null, fromEnemy: false,
-  homing: 0, drag: 0, minSpeed: 0,
+  homing: 0, drag: 0, minSpeed: 0, missile: false,
 });
 
 const newParticle = () => ({
@@ -177,6 +181,9 @@ export class Game {
     this.storm = null;
     this.stormTimer = 5;
     this.beams = [];
+    this.arcs = [];
+    this.sysT = { missile: 1.2, flak: 2.0, arc: 0.9 };
+    this.laserTick = 0;
 
     this.sector = sectorForWave(1, BOSS_INTERVAL);
     this._statsDirty = true;
@@ -405,7 +412,7 @@ export class Game {
         shield: a.shield ? baseHP * a.shield * 0.5 * (E ? E.hp : 1) : 0,
         phase: !!a.phase,
         // An elite always brings a gun, even if its archetype rams for a living.
-        weapon: a.weapon || (elite ? ELITE.fallbackWeapon : null),
+        weapon: elite ? eliteWeapon(wave, a.weapon) : a.weapon,
         splits: pick.key === 'splitter' ? 2 : 0,
       });
     }
@@ -521,7 +528,7 @@ export class Game {
     if (def.boss) {
       e.behavior = 'boss';
       e.holdY = this.y0 + this.fieldH * 0.22;
-    } else if (def.weapon && def.weapon !== ELITE.fallbackWeapon) {
+    } else if (def.weapon && ARTILLERY.has(def.type)) {
       // Artillery holds station and shoots; it is not trying to reach you.
       e.behavior = 'hover';
       e.holdY = this.y0 + this.fieldH * (0.16 + Math.random() * 0.42);
@@ -713,17 +720,7 @@ export class Game {
     this.fireTimer += 1 / Math.max(0.1, rate);
 
     const ship = this.ship;
-    const target = this.target;
-    let aim = -Math.PI / 2;
-    if (target) {
-      const raw = Math.atan2(target.y - ship.y, target.x - ship.x);
-      // Clamp into a forward cone so the ship never shoots backwards.
-      let delta = raw - aim;
-      while (delta > Math.PI) delta -= TAU;
-      while (delta < -Math.PI) delta += TAU;
-      aim += Math.max(-AIM_CONE, Math.min(AIM_CONE, delta));
-    }
-
+    const aim = this.aimAngle();
     const spread = 0.13;
     for (let i = 0; i < s.shots; i++) {
       const off = s.shots > 1 ? (i - (s.shots - 1) / 2) * spread : 0;
@@ -1109,6 +1106,7 @@ export class Game {
     this.updateBullets(dt);
     this.updateEnemies(dt);
     this.updateWingmen(dt);
+    this.updateSystems(dt);
     this.updatePickups(dt);
     this.updateParticles(dt);
     this.updateFloaters(dt);
@@ -1260,6 +1258,28 @@ export class Game {
       }
       if (consumed) continue;
 
+      if (b.homing > 0) {
+        // Player ordnance hunts the nearest live target.
+        let tx = null, td = 1e9;
+        for (const e of enemies) {
+          if (!e.active) continue;
+          const d = Math.hypot(e.x - b.x, e.y - b.y);
+          if (d < td) { td = d; tx = e; }
+        }
+        if (tx) {
+          const hx = tx.x - b.x, hy = tx.y - b.y;
+          const hd = Math.hypot(hx, hy) || 1;
+          const sp = Math.hypot(b.vx, b.vy) || 1;
+          const k = Math.min(1, b.homing * dt);
+          b.vx += ((hx / hd) * sp - b.vx) * k;
+          b.vy += ((hy / hd) * sp - b.vy) * k;
+        }
+        if (Math.random() < dt * 40) {
+          this.spawnParticle(b.x, b.y, -b.vx * 0.1, -b.vy * 0.1, 0.3, 3.2,
+            [1.4, 0.8, 0.35], 0.9, 1);
+        }
+      }
+
       for (let j = 0; j < enemies.length; j++) {
         const e = enemies[j];
         if (!e.active || b.hits.has(e)) continue;
@@ -1275,6 +1295,11 @@ export class Game {
             const sp = 40 + Math.random() * 90;
             this.spawnParticle(b.x, b.y, Math.cos(a) * sp, Math.sin(a) * sp,
               0.18, 2 + Math.random() * 2, e.color, 0.9, 1);
+          }
+          if (b.missile) {
+            this.spawnExplosion(b.x, b.y, 13, [1.5, 0.85, 0.35], false);
+            b.active = false;
+            break;
           }
           if (--b.pierce <= 0) { b.active = false; break; }
         }
@@ -1402,28 +1427,222 @@ export class Game {
     }
   }
 
+  /**
+   * Wingmen fire real guns.
+   *
+   * They used to sit at ship.y + 12 — BELOW the ship, further from the enemy —
+   * and apply invisible continuous damage gated by targeting range. Measured
+   * over a minute of play that produced exactly zero damage events: the nearest
+   * enemy was ~560px away against a 262px range, so they never found a target
+   * and there was nothing to see even when they did. Now they fly slightly
+   * ahead and shoot actual tracers, which both works and looks like it works.
+   */
+  wingmanPos(i, count) {
+    const side = i % 2 === 0 ? -1 : 1;
+    const rank = Math.floor(i / 2);
+    return [
+      this.ship.x + side * (32 + rank * 22) - this.ship.bank * 10,
+      this.ship.y - 2 + rank * 15 + Math.sin(this.wingAngle * 2.2 + i) * 3,
+    ];
+  }
+
   updateWingmen(dt) {
     const s = this.stats;
     if (s.drones <= 0) return;
     this.wingAngle += dt;
-    const dps = s.damage * s.fireRate * 0.2 * dt;
+
+    const rate = s.fireRate * SYSTEM.wingFraction * (this.buffs.overdrive > 0 ? 2.5 : 1);
+    this.wingTimer = (this.wingTimer || 0) - dt;
+    if (this.wingTimer > 0) return;
+    this.wingTimer += 1 / Math.max(0.1, rate);
+
+    const aim = this.aimAngle();
     for (let i = 0; i < s.drones; i++) {
-      const side = i % 2 === 0 ? -1 : 1;
-      const rank = Math.floor(i / 2);
-      const wx = this.ship.x + side * (34 + rank * 24);
-      const wy = this.ship.y + 12 + rank * 16 + Math.sin(this.wingAngle * 2 + i) * 3;
-      let best = null, bestD = 1e9;
+      const [wx, wy] = this.wingmanPos(i, s.drones);
+      const crit = Math.random() < s.critChance;
+      const b = this.bullets.obtain();
+      b.active = true;
+      b.x = wx; b.y = wy - 8;
+      b.vx = Math.cos(aim) * 720;
+      b.vy = Math.sin(aim) * 720;
+      b.dmg = s.damage * (crit ? s.critMult : 1);
+      b.crit = crit;
+      b.pierce = s.pierce;
+      b.life = 2.0;
+      b.radius = crit ? 4 : 2.6;
+      b.fromEnemy = false;
+      b.homing = 0; b.drag = 0; b.missile = false;
+      b.hits = b.hits || new Set();
+      b.hits.clear();
+    }
+  }
+
+  /** Shared firing angle: leads the current target inside the forward cone. */
+  aimAngle() {
+    let aim = -Math.PI / 2;
+    const t = this.target;
+    if (t) {
+      const raw = Math.atan2(t.y - this.ship.y, t.x - this.ship.x);
+      let delta = raw - aim;
+      while (delta > Math.PI) delta -= TAU;
+      while (delta < -Math.PI) delta += TAU;
+      aim += Math.max(-AIM_CONE, Math.min(AIM_CONE, delta));
+    }
+    return aim;
+  }
+
+  // --- auto-firing weapon systems ------------------------------------------
+
+  updateSystems(dt) {
+    const s = this.stats;
+    if (s.laserDps > 0) this.updateLaser(dt, s);
+    if (s.missileDmg > 0) this.updateMissiles(dt, s);
+    if (s.flakDmg > 0) this.updateFlak(dt, s);
+    if (s.arcDmg > 0) this.updateArc(dt, s);
+
+    for (let i = this.arcs.length - 1; i >= 0; i--) {
+      this.arcs[i].t -= dt;
+      if (this.arcs[i].t <= 0) this.arcs.splice(i, 1);
+    }
+  }
+
+  /** Continuous beam welded to whatever the guns are tracking. */
+  updateLaser(dt, s) {
+    let t = this.target;
+    if (!t || !t.active) {
+      let bd = 1e9;
       for (const e of this.enemies.items) {
-        if (!e.active) continue;
-        const d = Math.hypot(e.x - wx, e.y - wy);
-        if (d < bestD && d < s.range) { bestD = d; best = e; }
+        if (!e.active || e.y > this.ship.y) continue;
+        const d = Math.hypot(e.x - this.ship.x, e.y - this.ship.y);
+        if (d < bd) { bd = d; t = e; }
       }
-      if (!best) continue;
-      this.damageEnemy(best, dps, false, false);
-      if (Math.random() < dt * 9) {
-        this.spawnParticle(wx, wy, (best.x - wx) * 1.7, (best.y - wy) * 1.7,
-          0.12, 2, COLORS.ship, 1, 1);
+    }
+    this.laserTarget = t || null;
+    if (!t) return;
+    this.damageEnemy(t, s.laserDps * dt, false, false);
+    this.laserTick -= dt;
+    if (this.laserTick <= 0) {
+      this.laserTick = 0.45;
+      // Periodic number so the beam's contribution is legible, rather than HP
+      // silently draining with no feedback.
+      this.addFloater(t.x, t.y - t.radius, fmtShort(s.laserDps * 0.45), [0.5, 1.4, 1.7], 0.8);
+      if (Math.random() < 0.5) this.synth.hit();
+    }
+    for (let i = 0; i < 2; i++) {
+      this.spawnParticle(t.x + (Math.random() - 0.5) * t.radius,
+        t.y + (Math.random() - 0.5) * t.radius,
+        (Math.random() - 0.5) * 130, (Math.random() - 0.5) * 130,
+        0.16, 2.4, [0.5, 1.4, 1.7], 0.9, 1);
+    }
+  }
+
+  updateMissiles(dt, s) {
+    this.sysT.missile -= dt;
+    if (this.sysT.missile > 0) return;
+    this.sysT.missile += SYSTEM.missileCd;
+    for (let i = 0; i < s.missileCount; i++) {
+      const side = i % 2 === 0 ? -1 : 1;
+      const b = this.bullets.obtain();
+      b.active = true;
+      b.x = this.ship.x + side * 12;
+      b.y = this.ship.y + 4;
+      // Lobbed outward first, then it turns and hunts — reads as a launch.
+      const ang = -Math.PI / 2 + side * (0.5 + Math.random() * 0.3);
+      b.vx = Math.cos(ang) * 260;
+      b.vy = Math.sin(ang) * 260;
+      b.dmg = s.missileDmg;
+      b.crit = false;
+      b.pierce = 1;
+      b.life = 4.5;
+      b.radius = 5;
+      b.fromEnemy = false;
+      b.homing = 3.2;
+      b.drag = 0;
+      b.missile = true;
+      b.hits = b.hits || new Set();
+      b.hits.clear();
+    }
+    this.synth.ability();
+  }
+
+  /** Airburst over the thickest part of the swarm. */
+  updateFlak(dt, s) {
+    this.sysT.flak -= dt;
+    if (this.sysT.flak > 0) return;
+
+    let best = null, bestScore = -1;
+    for (const e of this.enemies.items) {
+      // Only skip craft still fully off-screen; excluding everything above y0
+      // meant flak ignored the entire entering formation.
+      if (!e.active || e.y < this.y0 - 30) continue;
+      let n = 0;
+      for (const o of this.enemies.items) {
+        if (!o.active) continue;
+        if (Math.hypot(o.x - e.x, o.y - e.y) < s.flakRadius) n++;
       }
+      if (n > bestScore) { bestScore = n; best = e; }
+    }
+    if (!best) return;
+    this.sysT.flak += SYSTEM.flakCd;
+
+    let hit = 0;
+    for (const e of this.enemies.items) {
+      if (!e.active) continue;
+      if (Math.hypot(e.x - best.x, e.y - best.y) > s.flakRadius) continue;
+      this.damageEnemy(e, s.flakDmg, false, false);
+      hit++;
+    }
+    this.spawnRing(best.x, best.y, s.flakRadius, [1.5, 0.9, 0.3], 0.4);
+    this.spawnExplosion(best.x, best.y, 16, [1.5, 0.9, 0.3], false);
+    if (hit) this.addFloater(best.x, best.y, fmtShort(s.flakDmg), [1.5, 1.0, 0.35], 1.0);
+    this.synth.kill(false);
+  }
+
+  /** Lightning that walks from target to target. */
+  updateArc(dt, s) {
+    this.sysT.arc -= dt;
+    if (this.sysT.arc > 0) return;
+
+    const live = this.enemies.items.filter((e) => e.active && e.y > this.y0 - 20);
+    if (!live.length) return;
+
+    // Seed on whatever the guns are tracking. Chaining outward from the ship
+    // failed entirely whenever the swarm held station up the lane, because the
+    // first hop had to clear a ship-centric distance test.
+    let seed = this.target && this.target.active ? this.target : null;
+    if (!seed) {
+      let bd = 1e9;
+      for (const e of live) {
+        const d = Math.hypot(e.x - this.ship.x, e.y - this.ship.y);
+        if (d < bd) { bd = d; seed = e; }
+      }
+    }
+    if (!seed) return;
+    this.sysT.arc += SYSTEM.arcCd;
+
+    const points = [{ x: this.ship.x, y: this.ship.y - 10 }];
+    const used = new Set();
+    let from = seed;
+    used.add(seed);
+    this.damageEnemy(seed, s.arcDmg, false, false);
+    points.push({ x: seed.x, y: seed.y });
+
+    for (let j = 1; j < s.arcJumps; j++) {
+      let best = null, bestD = 190;
+      for (const e of live) {
+        if (used.has(e) || !e.active) continue;
+        const d = Math.hypot(e.x - from.x, e.y - from.y);
+        if (d < bestD) { bestD = d; best = e; }
+      }
+      if (!best) break;
+      used.add(best);
+      this.damageEnemy(best, s.arcDmg, false, false);
+      points.push({ x: best.x, y: best.y });
+      from = best;
+    }
+    if (points.length > 1) {
+      this.arcs.push({ points, t: 0.22, max: 0.22 });
+      this.synth.shieldHit();
     }
   }
 
@@ -1535,6 +1754,7 @@ export class Game {
     this.renderDebris();
     this.renderPickups(time);
     this.renderEnemies(time);
+    this.renderSystems(time);
     this.renderBeams(time);
     this.renderBullets();
     this.renderParticles();
@@ -1821,6 +2041,36 @@ export class Game {
     }
   }
 
+  /** Player weapon systems: beam, chain lightning. */
+  renderSystems(time) {
+    const R = this.renderer;
+    const s = this.stats;
+
+    if (s.laserDps > 0 && this.laserTarget && this.laserTarget.active) {
+      const t = this.laserTarget;
+      const wob = Math.sin(time * 40) * 1.1;
+      R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, 7 + wob, 0.35, 1.25, 1.7, 0.55, 0.85);
+      R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, 2.4, 1.6, 1.9, 2.0, 0.95, 0.5);
+      R.glow(t.x, t.y, 26 + wob * 2, 0.5, 1.4, 1.8, 0.6, 1.6);
+      R.glow(this.ship.x, this.ship.y - 14, 16, 0.5, 1.4, 1.8, 0.55, 1.7);
+    }
+
+    for (const a of this.arcs) {
+      const k = a.t / a.max;
+      for (let i = 1; i < a.points.length; i++) {
+        const p0 = a.points[i - 1], p1 = a.points[i];
+        // Jagged: split each hop and kick the midpoint sideways.
+        const mx = (p0.x + p1.x) / 2 + (Math.random() - 0.5) * 26;
+        const my = (p0.y + p1.y) / 2 + (Math.random() - 0.5) * 26;
+        R.beam(p0.x, p0.y, mx, my, 3.2 * k, 0.6, 0.95, 1.9, k, 0.7);
+        R.beam(mx, my, p1.x, p1.y, 3.2 * k, 0.6, 0.95, 1.9, k, 0.7);
+        R.beam(p0.x, p0.y, mx, my, 1.2, 1.7, 1.9, 2.0, k, 0.5);
+        R.beam(mx, my, p1.x, p1.y, 1.2, 1.7, 1.9, 2.0, k, 0.5);
+        R.glow(p1.x, p1.y, 18, 0.6, 1.0, 1.9, 0.55 * k, 1.7);
+      }
+    }
+  }
+
   renderBeams(time) {
     const R = this.renderer;
     const w = WEAPONS.beam;
@@ -1853,7 +2103,7 @@ export class Game {
       // a plain shot the instant it appears.
       const c = b.fromEnemy
         ? (b.homing > 0 ? [1.7, 0.35, 0.85] : [1.5, 0.5, 0.25])
-        : (b.crit ? [1.6, 1.3, 0.5] : COLORS.bullet);
+        : (b.missile ? [1.6, 0.95, 0.4] : b.crit ? [1.6, 1.3, 0.5] : COLORS.bullet);
       const tail = 0.026;
       R.beam(b.x - b.vx * tail, b.y - b.vy * tail, b.x, b.y, b.radius * 1.5,
         c[0], c[1], c[2], 0.85, 0.9);
@@ -1953,12 +2203,10 @@ export class Game {
     R.disc(x, y + 2, 5.5, 1.7, 1.9, 2.0, 1);
 
     for (let i = 0; i < s.drones; i++) {
-      const side = i % 2 === 0 ? -1 : 1;
-      const rank = Math.floor(i / 2);
-      const wx = x + side * (34 + rank * 24);
-      const wy = y + 12 + rank * 16 + Math.sin(this.wingAngle * 2 + i) * 3;
-      R.glow(wx, wy, 15, c[0], c[1], c[2], 0.5, 1.8);
-      R.poly(wx, wy, 6, 3, -Math.PI / 2, c[0], c[1], c[2], 1);
+      const [wx, wy] = this.wingmanPos(i, s.drones);
+      R.glow(wx, wy, 14, c[0], c[1], c[2], 0.42, 1.8);
+      R.poly(wx, wy, 6.5, 3, -Math.PI / 2 + bank * 0.25, c[0] * 0.8, c[1] * 0.8, c[2] * 0.8, 1);
+      R.glow(wx, wy + 7, 5, c[0], c[1], c[2], 0.5, 1.6);
     }
   }
 

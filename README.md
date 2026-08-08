@@ -55,6 +55,39 @@ control never snaps out from under a drag. Bounds forces apply either way — th
 lane is the lane. Handlers live on the scene canvas rather than the window, so
 the permanent upgrade panel painted over it keeps its own taps.
 
+### Weapon systems
+
+Beyond the main cannon there are five auto-firing systems, each an in-run
+upgrade on its own **WEAPONS** tab, level 0 meaning "not owned yet":
+
+| | |
+|---|---|
+| **Pulse Laser** | continuous beam welded to whatever the guns are tracking |
+| **Seeker Pod** | homing missiles, more of them per level, detonating on contact |
+| **Flak Cannon** | airburst over the thickest part of the swarm |
+| **Arc Coil** | lightning chaining outward from your target |
+| **Escort Wingmen** | wingmen flying formation and firing real tracers |
+
+Every one of them folds its output into `deriveStats().dps`. That is not
+cosmetic: the buying AI in both harnesses ranks upgrades by DPS-per-coin, so a
+weapon invisible to that calculation would simply never get bought, and the
+balance runs would quietly ignore a whole tab.
+
+### A targeting-range bug that hid three features
+
+Wingmen "did not work", and measuring showed why: **zero damage events in sixty
+seconds of play**. They sat at `ship.y + 12` — *below* the ship, further from
+the enemy — and applied invisible continuous damage gated by targeting range.
+The nearest enemy was ~560px away against a 262px range.
+
+The range was the real culprit, inherited from the tower build where enemies
+converged from every side. In a lane ~600px long it meant the guns could barely
+see past their own nose, which silently broke the laser (never acquired a
+target) and the Arc Coil (first hop failed a ship-centric distance test) too.
+Base range went 190 → 340, wingmen now fly slightly ahead and fire real
+tracers, and the arc seeds on the tracked target instead of chaining outward
+from the hull.
+
 ### Craft silhouettes
 
 Enemies are assembled from the same five SDF primitives in a local frame where

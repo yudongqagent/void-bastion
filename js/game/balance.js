@@ -186,9 +186,16 @@ export const UPGRADES = {
   fireRate:    { tab: 'offense', label: 'rate', name: 'Cycle Rate',      desc: 'Shots per second',           base: 40,   growth: 1.145, add: 0.11,  fmt: 'rate' },
   critChance:  { tab: 'offense', label: 'crit', name: 'Targeting AI',    desc: 'Critical hit chance',        base: 90,   growth: 1.165, add: 0.014, fmt: 'pct', cap: 0.75, maxLevel: 52 },
   critMult:    { tab: 'offense', label: 'crit dmg', name: 'Overcharge',      desc: 'Critical damage multiplier', base: 130,  growth: 1.155, add: 0.16,  fmt: 'mult' },
-  multishot:   { tab: 'offense', label: 'shots', name: 'Split Barrel',    desc: 'Extra projectiles per shot', base: 420,  growth: 1.30,  add: 1,     fmt: 'int', cap: 7, maxLevel: 7 },
+  multishot:   { tab: 'offense', label: 'shots', name: 'Split Barrel',    desc: 'Extra projectiles per shot', base: 420,  growth: 1.30,  add: 1,     fmt: 'int', cap: 8, maxLevel: 8 },
   pierce:      { tab: 'offense', label: 'pierce', name: 'Rail Coil',       desc: 'Enemies pierced per shot',   base: 380,  growth: 1.34,  add: 1,     fmt: 'int', cap: 9, maxLevel: 9 },
-  range:       { tab: 'offense', label: 'range', name: 'Sensor Array',    desc: 'Targeting range',            base: 55,   growth: 1.135, add: 9,     fmt: 'flat' },
+  // --- weapon systems: level 0 means "not owned yet" ---------------------
+  laser:       { tab: 'weapons', label: 'laser',    name: 'Pulse Laser',    desc: 'Continuous beam on your target',   base: 700,  growth: 1.20,  add: 62,  fmt: 'flat' },
+  missiles:    { tab: 'weapons', label: 'missile',  name: 'Seeker Pod',     desc: 'Homing missiles, more per level',  base: 1000, growth: 1.24,  add: 55,  fmt: 'flat' },
+  flak:        { tab: 'weapons', label: 'flak',     name: 'Flak Cannon',    desc: 'Airbursts over enemy clusters',    base: 1400, growth: 1.23,  add: 105, fmt: 'flat' },
+  arc:         { tab: 'weapons', label: 'arc',      name: 'Arc Coil',       desc: 'Lightning chaining between enemies', base: 1800, growth: 1.24, add: 84, fmt: 'flat' },
+  drones:      { tab: 'weapons', label: 'wingmen',  name: 'Escort Wingmen', desc: 'Wingmen firing alongside you',     base: 900,  growth: 1.55,  add: 1,   fmt: 'int', cap: 6, maxLevel: 6 },
+
+  range:       { tab: 'offense', label: 'range', name: 'Sensor Array',    desc: 'How far up the lane you track', base: 55, growth: 1.135, add: 11,    fmt: 'flat' },
 
   maxHull:     { tab: 'defense', label: 'hull', name: 'Hull Plating',    desc: 'Maximum hull',               base: 30,   growth: 1.13,  add: 42,    fmt: 'flat' },
   regen:       { tab: 'defense', label: 'regen', name: 'Nanorepair',      desc: 'Hull regenerated per sec',   base: 65,   growth: 1.15,  add: 3.2,   fmt: 'rate' },
@@ -200,7 +207,6 @@ export const UPGRADES = {
   coinBonus:   { tab: 'utility', label: 'coins', name: 'Salvage Rig',     desc: 'Coins from every source',    base: 150,  growth: 1.20,  add: 0.075, fmt: 'pctBonus' },
   magnet:      { tab: 'utility', label: 'magnet', name: 'Tractor Field',   desc: 'Pickup collection radius',   base: 150,  growth: 1.19,  add: 11,    fmt: 'flat', maxLevel: 34 },
   evasion:     { tab: 'utility', label: 'dodge', name: 'Thruster Vanes',  desc: 'Autopilot dodge speed',      base: 240,  growth: 1.23,  add: 0.05,  fmt: 'mult', maxLevel: 20 },
-  drones:      { tab: 'utility', label: 'wingmen', name: 'Escort Wingmen',  desc: 'Wingmen flying in formation',base: 900,  growth: 1.55,  add: 1,     fmt: 'int', cap: 6, maxLevel: 6 },
   lifesteal:   { tab: 'utility', label: 'siphon', name: 'Siphon Core',     desc: 'Hull restored per kill',     base: 260,  growth: 1.185, add: 0.9,   fmt: 'flat' },
 };
 
@@ -294,6 +300,27 @@ export function startingWave(level) {
 /** Speed steps the player may select, widened by Temporal Rig. */
 export function speedOptions(labSpeedLevel = 0) {
   return [1, 2, 3, 4].slice(0, 2 + Math.min(2, labSpeedLevel || 0));
+}
+
+// Fire intervals for the auto-firing weapon systems. Kept here rather than in
+// game.js so deriveStats can fold each system's contribution into `dps` — the
+// buying AI in both harnesses ranks upgrades by DPS-per-coin, and a weapon whose
+// output is invisible to that calculation would simply never get bought.
+export const SYSTEM = { missileCd: 2.5, flakCd: 3.1, arcCd: 1.7, wingFraction: 0.34 };
+
+/**
+ * Weapon an elite carries. The pool widens with depth, so late elites bring the
+ * genuinely nasty ordnance rather than the same starter volley forever. An
+ * elite of an already-armed archetype usually keeps its own gun.
+ */
+export function eliteWeapon(wave, own) {
+  const pool = ['burst'];
+  if (wave >= 38) pool.push('spread');
+  if (wave >= 58) pool.push('homing');
+  if (wave >= 82) pool.push('radial');
+  if (wave >= 110) pool.push('beam');
+  if (own) { pool.push(own, own); }
+  return pool[(Math.random() * pool.length) | 0];
 }
 
 // Abilities are one-time Core unlocks, then free to use on cooldown forever.
@@ -390,17 +417,41 @@ export function deriveStats(up, lab, prestigeCount) {
 
   // Effective single-target DPS, used by the simulator and the HUD readout.
   const critFactor = 1 + critChance * (critMult - 1);
-  const dps = damage * fireRate * shots * critFactor;
+  const mainDps = damage * fireRate * shots * critFactor;
+
+  // Every auto-firing system folded in, so `dps` means total output. Wingmen
+  // fire real guns at a fraction of the ship's rate; the rest are on timers.
+  const wingCount = Math.min(U.drones.cap, lv('drones'));
+  const wingDps = wingCount * damage * fireRate * SYSTEM.wingFraction * critFactor;
+  const laserDps = U.laser.add * lv('laser') * dmgMult;
+  const missileLv = lv('missiles');
+  const missileDps = missileLv
+    ? ((150 + U.missiles.add * missileLv) * dmgMult *
+        Math.min(5, 1 + Math.floor(missileLv / 4))) / SYSTEM.missileCd
+    : 0;
+  const flakDps = (U.flak.add * lv('flak') * dmgMult) / SYSTEM.flakCd;
+  // Arc hits several targets; count two for single-target-equivalent purposes.
+  const arcDps = (U.arc.add * lv('arc') * dmgMult * 2) / SYSTEM.arcCd;
+  const dps = mainDps + wingDps + laserDps + missileDps + flakDps + arcDps;
 
   return {
     damage, fireRate, shots, pierce, critChance, critMult, dps,
-    range:       190 + U.range.add * lv('range'),
+    range:       340 + U.range.add * lv('range'),
     maxHull:     (220 + U.maxHull.add * lv('maxHull')) * hullMult,
     regen:       (1.5 + U.regen.add * lv('regen')) * hullMult,
     maxShield:   (0 + U.shieldMax.add * lv('shieldMax')) * hullMult,
     shieldRegen: (2 + U.shieldRegen.add * lv('shieldRegen')) * hullMult,
     armor:       Math.min(U.armor.cap, U.armor.add * lv('armor')),
     thorns:      U.thorns.add * lv('thorns'),
+    // --- weapon systems -------------------------------------------------
+    laserDps:     U.laser.add * lv('laser') * dmgMult,
+    missileDmg:   lv('missiles') ? (150 + U.missiles.add * lv('missiles')) * dmgMult : 0,
+    missileCount: Math.min(5, 1 + Math.floor(lv('missiles') / 4)),
+    flakDmg:      U.flak.add * lv('flak') * dmgMult,
+    flakRadius:   72 + lv('flak') * 2.4,
+    arcDmg:       U.arc.add * lv('arc') * dmgMult,
+    arcJumps:     Math.min(8, 2 + Math.floor(lv('arc') / 4)),
+
     coinMult:    coinMult * (1 + U.coinBonus.add * lv('coinBonus')),
     // Pickups have to be flown over to be collected, so magnet radius is a
     // real economy stat, not a convenience: without it, loot drifts off-screen.

@@ -27,7 +27,12 @@ function statText(key, stats) {
     shieldMax: stats.maxShield, shieldRegen: stats.shieldRegen, armor: stats.armor,
     thorns: stats.thorns, coinBonus: stats.coinMult, magnet: stats.magnet,
     evasion: stats.evasion, drones: stats.drones, lifesteal: stats.lifesteal,
+    // Weapon systems. Without these the lookup returned undefined and fmt()
+    // rendered every one of them as "∞".
+    laser: stats.laserDps, missiles: stats.missileDmg,
+    flak: stats.flakDmg, arc: stats.arcDmg,
   }[key];
+  if (v == null || !isFinite(v)) return '—';
   switch (u.fmt) {
     case 'pct':      return (v * 100).toFixed(1) + '%';
     case 'pctBonus': return '×' + v.toFixed(2);
