@@ -67,14 +67,12 @@ export class UI {
   }
 
   cache() {
-    for (const id of ['waveNum', 'coinNum', 'coreNum', 'hullFill', 'hullText',
-      'shieldBar', 'shieldFill', 'shieldText', 'bossTag', 'upgradeList', 'drawer',
+    for (const id of ['waveNum', 'coinNum', 'coreNum', 'bossTag', 'upgradeList', 'drawer',
       'abilities', 'modalRoot', 'toasts',
       'speedBtn', 'soundBtn', 'labList', 'abilityShop', 'labCores', 'menuStats',
       'zoneName']) {
       this[id] = this.$(id);
     }
-    this.hullBar = this.hullFill.parentElement;
   }
 
   bind() {
@@ -450,19 +448,6 @@ export class UI {
     this.bossTag.hidden = !isBossWave(run.wave);
     this.coinNum.textContent = fmt(run.coins);
     this.coreNum.textContent = fmt(meta.cores);
-
-    const hf = Math.max(0, Math.min(1, run.hull / s.maxHull));
-    this.hullFill.style.transform = `scaleX(${hf})`;
-    this.hullText.textContent = `${fmt(Math.max(0, run.hull))} / ${fmt(s.maxHull)}`;
-    this.hullBar.classList.toggle('low', hf < 0.3);
-
-    if (s.maxShield > 0) {
-      this.shieldBar.hidden = false;
-      this.shieldFill.style.transform = `scaleX(${Math.max(0, Math.min(1, run.shield / s.maxShield))})`;
-      this.shieldText.textContent = `SHIELD ${fmt(Math.max(0, run.shield))} / ${fmt(s.maxShield)}`;
-    } else {
-      this.shieldBar.hidden = true;
-    }
 
     this.refreshAbilities();
     this.refreshUpgrades();

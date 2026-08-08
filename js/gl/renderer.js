@@ -39,12 +39,14 @@ out vec2 v_local;
 out vec4 v_color;
 out vec2 v_param;
 flat out int v_shape;
+flat out float v_rot;
 
 void main() {
   v_local = a_corner;
   v_color = a_color;
   v_param = a_param;
   v_shape = int(a_shape + 0.5);
+  v_rot = a_rot;
 
   float c = cos(a_rot), s = sin(a_rot);
   vec2 p = a_corner * a_size;
@@ -61,7 +63,23 @@ in vec2 v_local;
 in vec4 v_color;
 in vec2 v_param;
 flat in int v_shape;
+flat in float v_rot;
 out vec4 outColor;
+
+// Fixed world-space key light, up and slightly left. Rotated into each shape's
+// local frame so a craft banking through a turn lights correctly instead of
+// carrying its highlight around with it. This one term is most of what makes
+// the difference between "glowing sprite" and "solid object under a sun".
+const vec2 KEY_LIGHT = vec2(-0.42, -0.91);
+
+float shading(vec2 p, float amount) {
+  if (amount <= 0.0) return 1.0;
+  float c = cos(-v_rot), s = sin(-v_rot);
+  vec2 L = vec2(KEY_LIGHT.x * c - KEY_LIGHT.y * s, KEY_LIGHT.x * s + KEY_LIGHT.y * c);
+  float lambert = clamp(dot(normalize(p + vec2(1e-4)), L), -1.0, 1.0);
+  // Ambient floor so the unlit side reads as shadow, never as a hole.
+  return mix(1.0, 0.58 + 0.52 * lambert, amount);
+}
 
 const float TAU = 6.28318530718;
 
@@ -91,8 +109,12 @@ void main() {
   } else if (v_shape == 1) {                // DISC
     float d = r - 1.0;
     alpha = edge(d);
-    // Rim light: brighten the outer 25% so filled shapes read as emissive.
-    rgb *= 1.0 + 1.9 * smoothstep(0.68, 1.0, r);
+    if (v_param.y > 0.0) {
+      rgb *= shading(p, v_param.y);
+    } else {
+      // Rim light: brighten the outer 25% so unshaded discs read as emissive.
+      rgb *= 1.0 + 1.9 * smoothstep(0.68, 1.0, r);
+    }
   } else if (v_shape == 2) {                // RING
     float t = max(v_param.x, 0.01);
     float d = abs(r - (1.0 - t)) - t;
@@ -106,13 +128,22 @@ void main() {
     // The rim boost is deliberately modest — at 2.1x a small enemy's edge is
     // most of its area, so it clipped to white and every archetype looked the
     // same colour once the additive glow was stacked on top.
-    float rim = smoothstep(-0.42, -0.02, d);
-    rgb *= 0.60 + 1.15 * rim;
+    if (v_param.y > 0.0) {
+      // Solid, lit hull plate with a darker edge line for definition.
+      rgb *= shading(p, v_param.y) * (1.0 - 0.30 * smoothstep(-0.16, 0.0, d));
+    } else {
+      float rim = smoothstep(-0.42, -0.02, d);
+      rgb *= 0.60 + 1.15 * rim;
+    }
   } else if (v_shape == 4) {                // BEAM
     float ax = abs(p.x), ay = abs(p.y);
     float soft = clamp(v_param.x, 0.02, 1.0);
     alpha = (1.0 - smoothstep(1.0 - soft, 1.0, ay)) * (1.0 - smoothstep(0.82, 1.0, ax));
-    rgb *= 1.0 + 1.3 * (1.0 - ay);
+    if (v_param.y > 0.0) {
+      rgb *= shading(vec2(p.x * 0.25, p.y), v_param.y);
+    } else {
+      rgb *= 1.0 + 1.3 * (1.0 - ay);
+    }
   } else {                                  // SPARK
     float d = length(vec2(p.x, p.y * 2.2));
     alpha = pow(max(0.0, 1.0 - d), 1.6);
@@ -364,6 +395,23 @@ export class Renderer {
   }
   poly(x, y, radius, sides, rot, r, g, b, a) {
     this.push(SHAPE.POLY, x, y, radius, radius, rot, r, g, b, a, sides);
+  }
+  /** Same shapes, lit by the key light — for anything meant to read as solid. */
+  polyLit(x, y, radius, sides, rot, r, g, b, a, shade = 1) {
+    this.push(SHAPE.POLY, x, y, radius, radius, rot, r, g, b, a, sides, shade);
+  }
+  discLit(x, y, radius, r, g, b, a, shade = 1) {
+    this.push(SHAPE.DISC, x, y, radius, radius, 0, r, g, b, a, 0, shade);
+  }
+  /** Non-uniform lit quad — hulls, decks, runways. */
+  slabLit(x, y, hw, hh, rot, r, g, b, a, shade = 1) {
+    this.push(SHAPE.BEAM, x, y, hw, hh, rot, r, g, b, a, 0.06, shade);
+  }
+  beamLit(x1, y1, x2, y2, width, r, g, b, a, shade = 1) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 0.001;
+    this.push(SHAPE.BEAM, (x1 + x2) / 2, (y1 + y2) / 2, len / 2, width,
+      Math.atan2(dy, dx), r, g, b, a, 0.06, shade);
   }
   /** Beam between two points, `width` thick, with soft edges. */
   beam(x1, y1, x2, y2, width, r, g, b, a, soft = 0.6) {

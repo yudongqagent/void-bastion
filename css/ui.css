@@ -153,37 +153,6 @@ html, body {
 .chip:active { background: rgba(77, 240, 255, 0.2); }
 .chip.off { color: var(--text-dim); border-color: rgba(124,150,166,0.25); }
 
-.bars { display: flex; flex-direction: column; gap: 3px; margin-top: 5px; }
-.bar {
-  position: relative;
-  height: 13px;
-  background: rgba(0, 0, 0, 0.55);
-  border: 1px solid var(--line-soft);
-  border-radius: 3px;
-  overflow: hidden;
-}
-.bar i {
-  position: absolute;
-  inset: 0;
-  transform-origin: left;
-  transition: transform 0.14s linear;
-  display: block;
-}
-.bar.hull i { background: linear-gradient(90deg, #14e08a, #3ef5a0); box-shadow: 0 0 14px rgba(62,245,160,0.6); }
-.bar.hull.low i { background: linear-gradient(90deg, #c41f3f, #ff3b6b); box-shadow: 0 0 14px rgba(255,59,107,0.7); }
-.bar.shield i { background: linear-gradient(90deg, #2a7fd4, #4db8ff); box-shadow: 0 0 12px rgba(77,184,255,0.55); }
-.bar span {
-  position: relative;
-  display: block;
-  text-align: center;
-  font-size: 9.5px;
-  line-height: 13px;
-  letter-spacing: 0.05em;
-  color: #eaf6ff;
-  text-shadow: 0 1px 3px #000;
-  font-variant-numeric: tabular-nums;
-}
-
 /* ── abilities ────────────────────────────────────────────────── */
 
 #abilities {

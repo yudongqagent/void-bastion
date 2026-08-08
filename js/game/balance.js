@@ -96,6 +96,10 @@ export function bossStats(wave) {
 // controlling how often it shows up. `from` gates an archetype behind a wave so
 // the first few minutes stay legible while the roster opens up over time.
 
+// Ground emplacements ride the terrain instead of flying at you: they scroll
+// down with the world, shoot while they can, and are gone if you let them pass.
+export const GROUND_TYPES = new Set(['turret', 'tank', 'warship', 'sam']);
+
 export const ARCHETYPES = {
   //         from  weight decay   hp    speed  dmg   coin  radius sides  weapon
   drone:    { name: 'Drone',       from: 1,   weight: 100, decay: 90,  hp: 1.00, speed: 1.00, dmg: 1.00, coin: 1.00, radius: 11, sides: 3 },
@@ -109,7 +113,42 @@ export const ARCHETYPES = {
   radial:   { name: 'Radial Gun',  from: 56,  weight: 24,  decay: 400, hp: 2.40, speed: 0.50, dmg: 1.60, coin: 3.10, radius: 16, sides: 8, weapon: 'radial' },
   lancer:   { name: 'Lancer',      from: 78,  weight: 22,  decay: 460, hp: 2.00, speed: 0.55, dmg: 1.90, coin: 3.40, radius: 14, sides: 4, weapon: 'beam' },
   dread:    { name: 'Dreadnought', from: 110, weight: 20,  decay: 999, hp: 5.50, speed: 0.45, dmg: 2.60, coin: 5.20, radius: 22, sides: 6, shield: 2.0, weapon: 'spread' },
+
+  // --- ground emplacements ------------------------------------------------
+  turret:   { name: 'AA Turret',   from: 12,  weight: 24,  decay: 300, hp: 1.60, speed: 0, dmg: 1.10, coin: 1.90, radius: 13, sides: 8, weapon: 'aimed',  ground: true },
+  tank:     { name: 'Gun Tank',    from: 24,  weight: 22,  decay: 340, hp: 2.60, speed: 0, dmg: 1.40, coin: 2.70, radius: 14, sides: 4, weapon: 'aimed',  ground: true },
+  warship:  { name: 'Patrol Boat', from: 38,  weight: 20,  decay: 420, hp: 3.40, speed: 0, dmg: 1.60, coin: 3.40, radius: 19, sides: 4, weapon: 'spread', ground: true },
+  sam:      { name: 'SAM Battery', from: 62,  weight: 18,  decay: 999, hp: 3.00, speed: 0, dmg: 1.90, coin: 4.00, radius: 15, sides: 6, weapon: 'homing', ground: true },
 };
+
+/**
+ * Muted hull colours with one bright accent each.
+ *
+ * Flat neon made every craft a coloured blob; with distinct silhouettes doing
+ * the identification work, hulls can be military greys and olives lit by the
+ * key light, and colour goes where colour belongs — running lights, cockpits
+ * and engine glow.
+ */
+export const HULLS = {
+  drone:    { hull: [0.34, 0.36, 0.40], accent: [1.50, 0.35, 0.45] },
+  darter:   { hull: [0.42, 0.38, 0.28], accent: [1.55, 0.95, 0.25] },
+  brute:    { hull: [0.30, 0.31, 0.38], accent: [0.85, 0.45, 1.60] },
+  splitter: { hull: [0.28, 0.36, 0.31], accent: [0.30, 1.50, 0.70] },
+  shielder: { hull: [0.30, 0.34, 0.42], accent: [0.40, 0.80, 1.60] },
+  sentinel: { hull: [0.40, 0.34, 0.26], accent: [1.55, 0.62, 0.22] },
+  wraith:   { hull: [0.26, 0.25, 0.32], accent: [0.95, 0.75, 1.60] },
+  gunship:  { hull: [0.33, 0.35, 0.31], accent: [1.45, 0.75, 0.30] },
+  radial:   { hull: [0.36, 0.30, 0.30], accent: [1.55, 0.40, 0.35] },
+  lancer:   { hull: [0.30, 0.33, 0.37], accent: [1.55, 0.45, 0.55] },
+  dread:    { hull: [0.27, 0.29, 0.33], accent: [1.50, 0.55, 0.30] },
+  turret:   { hull: [0.35, 0.37, 0.33], accent: [1.45, 0.70, 0.25] },
+  tank:     { hull: [0.32, 0.35, 0.27], accent: [1.40, 0.80, 0.30] },
+  warship:  { hull: [0.30, 0.33, 0.36], accent: [1.45, 0.55, 0.30] },
+  sam:      { hull: [0.34, 0.33, 0.30], accent: [1.55, 0.35, 0.35] },
+  boss:     { hull: [0.34, 0.26, 0.28], accent: [1.60, 0.30, 0.35] },
+};
+
+export function hullFor(type) { return HULLS[type] || HULLS.drone; }
 
 /**
  * Archetypes legal on a wave, with weights ramped in AND decayed out.

@@ -227,6 +227,53 @@ ramming was never the thing killing the ship.
 
 ---
 
+## Art direction
+
+The look is grounded military rather than neon abstraction, which took three
+changes working together.
+
+**A key light.** The fragment shader carries a fixed world-space light, up and
+slightly left, rotated into each shape's local frame so a craft banking through
+a turn lights correctly instead of carrying its highlight around with it. That
+single term is most of the difference between "glowing sprite" and "solid object
+under a sun". Shapes opt in — energy (bullets, engines, explosions) still draws
+unlit and hot.
+
+**Muted hulls, bright accents.** Every craft was a coloured blob because colour
+was doing the identification work. Now silhouette does that job, so hulls are
+greys and olives lit by the key light and colour goes where colour belongs:
+running lights, cockpits, engine wash.
+
+**Ground.** A water plane with scrolling swell, and terrain features generated
+ahead of the ship — islands with surf and beach rings, airbases with dashed
+runways and pads, convoy lanes, reefs — recycled as they scroll past. Still no
+textures: it is all the same five SDF primitives.
+
+### Reading condition instead of bars
+
+There are no health bars anywhere.
+
+Bars across the top are dead pixels for most of a run: they read 100% almost
+always, and in the moment they matter your eyes are on the ship, not the chrome.
+The player's hull and shield now appear as a small percentage above the jet, and
+**only when below 100%** — zero UI in the good case, instant legibility in the
+bad one, colour-graded green through amber to red so severity reads without the
+number.
+
+Enemy condition is on the enemy. Hull paint darkens as health drops, wounded
+craft stream smoke, and below a quarter they burn. No floating bars at all.
+
+### Ground emplacements
+
+Turrets, gun tanks, patrol boats and SAM batteries are fixed to the world: they
+scroll down with the terrain, snap onto a deck or headland if one is passing,
+shoot while they can, and are simply gone if you let them by. They never ram.
+
+That last detail is why they needed their own balance pass — an air unit trades
+itself for a ram, an emplacement is pure incoming fire. At air-unit weights they
+cut run 1 from wave 48 to **wave 19**, so they arrive later and stay a garnish:
+3% of the roster at wave 12, ~30% by wave 70.
+
 ## Rendering
 
 A hand-written WebGL2 renderer ([`js/gl/renderer.js`](js/gl/renderer.js)), ~450

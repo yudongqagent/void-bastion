@@ -23,8 +23,10 @@ import {
   enemyHP, enemyCount, enemySpeed, enemyDamage, coinValue, waveClearBonus,
   spawnWindow, isBossWave, bossStats, spawnTable, ABILITIES, deriveStats,
   BOSS_INTERVAL, TUNING, WEAPONS, ELITE, eliteChance, eliteWeapon, SYSTEM,
+  GROUND_TYPES, hullFor,
 } from './balance.js';
 import { sectorForWave, sectorNumber, isSectorStart } from './sectors.js';
+import { Terrain, groundFor } from './terrain.js';
 
 const TAU = Math.PI * 2;
 
@@ -109,6 +111,7 @@ const newEnemy = () => ({
   shield: 0, maxShield: 0, hitFlash: 0, splits: 0, boss: false, ranged: false,
   fireT: 0, phase: false, phaseT: 0, distScale: 1, stun: 0,
   behavior: 'dive', t: 0, homeX: 0, amp: 0, freq: 0, holdY: 0, face: 0,
+  ground: false, hull: null, accent: null, smokeT: 0,
   weapon: null, wcd: 0, elite: false, burst: 0, burstT: 0, spin2: 0,
 });
 
@@ -169,6 +172,7 @@ export class Game {
     this.fireTimer = 0;
     this.wingAngle = 0;
 
+    this.terrain = new Terrain();
     this.scroll = 0;
     this.scrollSpeed = 150;
     this.layers = [];
@@ -197,6 +201,7 @@ export class Game {
 
     this.applyLayout();
     this.buildBackdrop();
+    this.terrain.reset(this.y0);
     this.recomputeStats();
   }
 
@@ -233,6 +238,7 @@ export class Game {
     this.w = w; this.h = h;
     this.applyLayout();
     this.buildBackdrop();
+    this.terrain.reset(this.y0);
   }
 
   /**
@@ -323,6 +329,8 @@ export class Game {
         n.x = this.x0 + Math.random() * this.fieldW;
       }
     }
+
+    this.terrain.update(dt, base * dt, this.x0, this.x1, this.y0, this.y1);
   }
 
   // --- zones ----------------------------------------------------------------
@@ -417,6 +425,7 @@ export class Game {
         radius: a.radius * (E ? E.radius : 1), sides: a.sides,
         shield: a.shield ? baseHP * a.shield * 0.5 * (E ? E.hp : 1) : 0,
         phase: !!a.phase,
+        ground: !!a.ground,
         // An elite always brings a gun, even if its archetype rams for a living.
         weapon: elite ? eliteWeapon(wave, a.weapon) : a.weapon,
         splits: pick.key === 'splitter' ? 2 : 0,
@@ -509,6 +518,11 @@ export class Game {
     e.shield = e.maxShield = def.shield || 0;
     e.type = def.type;
     e.boss = !!def.boss;
+    e.ground = !!def.ground;
+    e.smokeT = 0;
+    const hp = hullFor(def.type);
+    e.hull = hp.hull;
+    e.accent = hp.accent;
     e.elite = !!def.elite;
     e.weapon = def.weapon || null;
     e.wcd = 0.6 + Math.random() * 1.4;
@@ -531,7 +545,17 @@ export class Game {
     // Behaviour by archetype. "Most enemies attack by bumping" — dive and
     // swarm both end in a ram, which is why contact damage still drives the
     // balance model.
-    if (def.boss) {
+    if (def.ground) {
+      // Emplacements are placed ON the map — snapped to a deck or headland if
+      // one is passing, otherwise they ride open water.
+      e.behavior = 'ground';
+      const anchors = this.terrain.anchorPoints(this.y0 - 200, this.y0 + 60);
+      if (anchors.length) {
+        const a2 = anchors[(Math.random() * anchors.length) | 0];
+        e.x = Math.min(Math.max(a2.x, this.x0 + 26), this.x1 - 26);
+        e.y = a2.y;
+      }
+    } else if (def.boss) {
       e.behavior = 'boss';
       e.holdY = this.y0 + this.fieldH * 0.22;
     } else if (def.weapon && ARTILLERY.has(def.type)) {
@@ -1333,6 +1357,21 @@ export class Game {
       if (e.phase) e.phaseT += dt * 2.6;
       if (regen > 0 && e.hp < e.maxHp) e.hp = Math.min(e.maxHp, e.hp + e.maxHp * regen * dt);
 
+      // Wounded craft stream smoke — condition you can read across the lane.
+      const frac = e.hp / (e.maxHp || 1);
+      if (frac < 0.55) {
+        e.smokeT -= dt;
+        if (e.smokeT <= 0) {
+          e.smokeT = 0.05 + frac * 0.14;
+          const dark = frac < 0.28;
+          this.spawnParticle(
+            e.x + (Math.random() - 0.5) * e.radius, e.y - e.radius * 0.3,
+            (Math.random() - 0.5) * 26, -34 - Math.random() * 34,
+            0.55 + Math.random() * 0.4, 4 + Math.random() * 4,
+            dark ? [0.16, 0.15, 0.16] : [0.30, 0.29, 0.30], 0.95, 1);
+        }
+      }
+
       if (e.stun > 0) {
         e.stun -= dt;
         e.angle += dt * 9;
@@ -1356,6 +1395,12 @@ export class Game {
       }
 
       switch (e.behavior) {
+        case 'ground': {
+          // Fixed to the world: it scrolls, it does not pursue.
+          e.y += this.scrollSpeed * (this.sector.scrollMult || 1) * dt;
+          e.face = 0;
+          break;
+        }
         case 'swarm': {
           // Fastest and most direct — a straight ram at where the ship is.
           const dx = ship.x - e.x, dy = ship.y - e.y;
@@ -1421,7 +1466,7 @@ export class Game {
 
       // Contact: this is how most enemies "attack" and also how they die.
       const dx = ship.x - e.x, dy = ship.y - e.y;
-      if (dx * dx + dy * dy < (ship.radius + e.radius) ** 2) {
+      if (!e.ground && dx * dx + dy * dy < (ship.radius + e.radius) ** 2) {
         this.damageShip(e.dmg * TUNING.CONTACT_SCALE * (1 + this.enrage * 2), e);
         if (e.active && !e.boss) {
           // A rammer is spent whether or not it killed you; still pays out.
@@ -1810,7 +1855,10 @@ export class Game {
     R.flash[1] = this.flashColor[1] * this.flashAmount;
     R.flash[2] = this.flashColor[2] * this.flashAmount;
 
+    const pal = groundFor(this.sector.id);
+    this.terrain.renderWater(R, pal, time, this.x0, this.x1, this.y0, this.y1, this.scroll);
     this.renderBackdrop(time);
+    this.terrain.render(R, pal, time);
     this.renderDebris();
     this.renderPickups(time);
     this.renderEnemies(time);
@@ -1830,17 +1878,19 @@ export class Game {
     const tint = this.sector.starTint;
 
     for (const n of this.nebulae) {
-      R.glow(n.x, n.y, n.r, haze[0], haze[1], haze[2], n.a, 2.6);
+      R.glow(n.x, n.y, n.r, haze[0], haze[1], haze[2], n.a * 0.75, 2.6);
     }
     for (const layer of this.layers) {
       for (const st of layer.stars) {
         // Near stars streak with the motion; far ones stay points. Cheap, and
         // it is most of what sells forward flight.
+        // Now that the lane is water and land, these read as spray and speed
+        // glints rather than stars — kept faint so they never fight the terrain.
         if (layer.depth > 0.9) {
-          R.push(5, st.x, st.y, st.r * 0.9, st.r * 5.5, 0,
-            tint[0], tint[1], tint[2], st.a, 0, 0);
+          R.push(5, st.x, st.y, st.r * 0.8, st.r * 5.0, 0,
+            tint[0], tint[1], tint[2], st.a * 0.35, 0, 0);
         } else {
-          R.glow(st.x, st.y, st.r * 2.4, tint[0], tint[1], tint[2], st.a * 0.6, 2.2);
+          R.glow(st.x, st.y, st.r * 2.0, tint[0], tint[1], tint[2], st.a * 0.18, 2.2);
         }
       }
     }
@@ -1923,15 +1973,22 @@ export class Game {
     // the fuselage and every archetype ends up looking identical. Dimming the
     // hull and letting one hot cockpit sit on top is what makes a silhouette
     // read as a ship rather than a glowing smear.
-    const HULL = 0.42;
+    // Structure is a lit, muted hull; only the accent parts glow. Hull colour
+    // darkens with damage, so a craft's condition is legible from its paint
+    // rather than from a bar floating over it.
+    const acc = e.accent || [r, g, b];
+    const hp = Math.max(0, Math.min(1, e.hp / (e.maxHp || 1)));
+    const wear = 0.45 + 0.55 * hp;
+    const hr = r * wear, hg = g * wear, hb = b * wear;
+
     const bar = (x1, y1, x2, y2, w, m = 1, a = alpha) =>
-      R.beam(wx(x1, y1), wy(x1, y1), wx(x2, y2), wy(x2, y2), w * s,
-        r * m * HULL, g * m * HULL, b * m * HULL, a * 0.95, 0.42);
+      R.beamLit(wx(x1, y1), wy(x1, y1), wx(x2, y2), wy(x2, y2), w * s,
+        hr * m, hg * m, hb * m, a, 0.9);
     const dot = (x, y, rad, m = 1, a = alpha) =>
-      R.disc(wx(x, y), wy(x, y), rad * s, r * m, g * m, b * m, a);
+      R.disc(wx(x, y), wy(x, y), rad * s, acc[0] * m * 0.5, acc[1] * m * 0.5, acc[2] * m * 0.5, a);
     const gon = (x, y, rad, sides, rot, m = 1, a = alpha) =>
-      R.poly(wx(x, y), wy(x, y), rad * s, sides, f + rot,
-        r * m * HULL, g * m * HULL, b * m * HULL, a);
+      R.polyLit(wx(x, y), wy(x, y), rad * s, sides, f + rot,
+        hr * m, hg * m, hb * m, a, 0.9);
 
     switch (e.type) {
       case 'darter':      // needle interceptor — long, thin, all nose
@@ -2038,6 +2095,43 @@ export class Game {
         break;
       }
 
+      case 'turret':      // AA emplacement — ring base, twin barrels
+        R.ring(e.x, e.y, s * 1.05, s * 0.2, hr * 1.2, hg * 1.2, hb * 1.2, alpha);
+        gon(0, 0, 0.66, 8, 0.2, 1.0);
+        bar(-0.24, 0.1, -0.24, 1.15, 0.14, 1.3);
+        bar(0.24, 0.1, 0.24, 1.15, 0.14, 1.3);
+        dot(0, 0, 0.26, 2.0);
+        break;
+
+      case 'tank':        // tracked hull with a turret and gun
+        bar(-0.72, -0.7, -0.72, 0.7, 0.3, 0.85);
+        bar(0.72, -0.7, 0.72, 0.7, 0.3, 0.85);
+        R.slabLit(e.x, e.y, s * 0.62, s * 0.72, f, hr, hg, hb, alpha, 0.9);
+        gon(0, 0.05, 0.44, 6, 0.3, 1.15);
+        bar(0, 0.3, 0, 1.2, 0.13, 1.3);
+        dot(0, 0.05, 0.2, 1.9);
+        break;
+
+      case 'warship':     // hull, superstructure, deck guns
+        R.slabLit(e.x, e.y, s * 0.42, s * 1.15, f, hr, hg, hb, alpha, 0.95);
+        R.slabLit(wx(0, -0.15), wy(0, -0.15), s * 0.3, s * 0.4, f, hr * 1.3, hg * 1.3, hb * 1.3, alpha, 0.8);
+        bar(-0.34, 0.55, -0.34, 1.0, 0.12, 1.3);
+        bar(0.34, 0.55, 0.34, 1.0, 0.12, 1.3);
+        bar(0, -0.5, 0, -1.0, 0.16, 1.1);
+        dot(0, -0.15, 0.2, 1.8);
+        dot(0, 0.75, 0.14, 1.6);
+        break;
+
+      case 'sam':         // launch rails on a rotating base
+        R.ring(e.x, e.y, s * 0.95, s * 0.16, hr * 1.2, hg * 1.2, hb * 1.2, alpha);
+        gon(0, 0, 0.55, 6, 0, 1.0);
+        for (let i = -1; i <= 1; i += 2) {
+          bar(i * 0.32, -0.1, i * 0.32, 0.95, 0.17, 1.2);
+          dot(i * 0.32, 0.9, 0.13, 2.2);
+        }
+        dot(0, 0, 0.22, 1.7);
+        break;
+
       default:            // drone — the workhorse dart
         bar(0, -0.85, 0, 1.05, 0.3, 1.05);
         bar(-1.05, -0.45, 0, 0.15, 0.22, 0.85);
@@ -2046,8 +2140,13 @@ export class Game {
         break;
     }
 
-    // Engine wash trailing behind, so a craft reads as moving even when static.
-    R.glow(wx(0, -1.05), wy(0, -1.05), s * 0.8, r, g, b, 0.22 * alpha, 1.9);
+    // Running light — the one deliberately hot part of an otherwise matte hull.
+    R.glow(wx(0, 0.3), wy(0, 0.3), s * 0.5, acc[0], acc[1], acc[2], 0.34 * alpha, 1.9);
+
+    // Engine wash trailing behind — only for things that actually fly.
+    if (!e.ground) {
+      R.glow(wx(0, -1.05), wy(0, -1.05), s * 0.8, acc[0], acc[1], acc[2], 0.28 * alpha, 1.9);
+    }
   }
 
   renderEnemies(time) {
@@ -2070,14 +2169,26 @@ export class Game {
       }
 
       const hpFrac = Math.max(0, e.hp / e.maxHp);
-      R.glow(e.x, e.y, e.radius * 2.4, r, g, b, 0.13 * alpha, 2.2);
+      R.glow(e.x, e.y, e.radius * 2.2, r, g, b, 0.09 * alpha, 2.3);
       this.renderCraft(e, r, g, b, alpha);
+
+      // Battle damage instead of a floating bar: scorching, then fire.
+      if (hpFrac < 0.55 && !e.boss) {
+        const burn = 1 - hpFrac / 0.55;
+        R.glow(e.x - e.radius * 0.3, e.y - e.radius * 0.2, e.radius * 0.7,
+          0.06, 0.05, 0.05, 0.5 * burn * alpha, 2.0);
+        if (hpFrac < 0.28) {
+          const fl = 0.6 + 0.4 * Math.sin(time * 30 + e.spin2);
+          R.glow(e.x + e.radius * 0.25, e.y, e.radius * 0.55,
+            1.6, 0.55, 0.12, 0.75 * fl * alpha, 1.7);
+        }
+      }
 
       if (e.elite) {
         // Gold chevron ring: at a glance, "this one shoots and it hurts".
         const p = 1 + Math.sin(time * 3 + e.spin2) * 0.05;
-        R.ring(e.x, e.y, e.radius * 1.38 * p, 1.7, 1.6, 1.15, 0.3, 0.75 * alpha);
-        R.glow(e.x, e.y, e.radius * 2.4, 1.5, 1.1, 0.35, 0.16 * alpha, 2.0);
+        R.ring(e.x, e.y, e.radius * 1.34 * p, 1.4, 1.5, 1.05, 0.28, 0.5 * alpha);
+        R.glow(e.x, e.y, e.radius * 2.2, 1.4, 1.0, 0.3, 0.10 * alpha, 2.1);
       }
       if (e.stun > 0) {
         R.ring(e.x, e.y, e.radius + 7 + Math.sin(time * 20) * 2, 1.6, 0.5, 0.9, 1.9, 0.8);
@@ -2090,13 +2201,6 @@ export class Game {
         R.ring(e.x, e.y, e.radius * 1.7 + Math.sin(time * 4) * 2, 2.2, 1.6, 0.25, 0.35, 0.85);
         R.ring(e.x, e.y, e.radius * 2.0, 3.0, 1.5, 0.4, 0.2, 0.25);
         R.ring(e.x, e.y, e.radius * 2.0, 3.0 * hpFrac, 1.6, 0.5, 0.2, 0.9);
-      } else if (hpFrac < 0.999) {
-        // Health pips sit ahead of the craft so they never hide under the hull.
-        const w = e.radius * 1.1;
-        const by = e.y + e.radius * 1.55;
-        R.beam(e.x - w, by, e.x + w, by, 1.1, 0.35, 0.35, 0.42, 0.3 * alpha, 0.5);
-        R.beam(e.x - w, by, e.x - w + 2 * w * hpFrac, by, 1.1,
-          r * 0.75, g * 0.75, b * 0.75, 0.7 * alpha, 0.5);
       }
     }
   }
@@ -2109,8 +2213,8 @@ export class Game {
     if (s.laserDps > 0 && this.laserTarget && this.laserTarget.active) {
       const t = this.laserTarget;
       const wob = Math.sin(time * 40) * 1.1;
-      R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, 7 + wob, 0.35, 1.25, 1.7, 0.55, 0.85);
-      R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, 2.4, 1.6, 1.9, 2.0, 0.95, 0.5);
+      R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, 3.4 + wob * 0.5, 0.35, 1.25, 1.7, 0.42, 0.85);
+      R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, 1.3, 1.5, 1.85, 2.0, 0.9, 0.5);
       R.glow(t.x, t.y, 26 + wob * 2, 0.5, 1.4, 1.8, 0.6, 1.6);
       R.ring(t.x, t.y, t.radius + 6 + Math.sin(time * 18) * 2, 1.5,
         0.6, 1.5, 1.9, 0.7);
@@ -2299,6 +2403,8 @@ export class Game {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const sx = this.renderer.shake[0], sy = this.renderer.shake[1];
+
+    this.renderShipStatus(ctx, sx, sy);
     for (const f of this.floaters) {
       const t = f.life / f.maxLife;
       const size = 13 * f.scale;
@@ -2313,6 +2419,51 @@ export class Game {
     ctx.restore();
   }
 }
+
+/**
+ * Condition readout pinned to the ship, shown only when something is missing.
+ *
+ * Permanent bars across the top of the screen are dead pixels for most of a
+ * run — they read 100% almost always, and when they do matter your eyes are on
+ * the ship, not the chrome. Showing damage where the damage is happening means
+ * zero UI in the good case and instant legibility in the bad one.
+ */
+Game.prototype.renderShipStatus = function (ctx, sx, sy) {
+  const { run } = this.state;
+  const s = this.stats;
+  const hull = Math.max(0, Math.min(1, run.hull / s.maxHull));
+  const shield = s.maxShield > 0 ? Math.max(0, Math.min(1, run.shield / s.maxShield)) : 1;
+  if (hull > 0.995 && shield > 0.995) return;
+
+  const x = this.ship.x + sx;
+  // Above the ship: below it collides with the ability row on a phone.
+  let y = this.ship.y - this.ship.radius - 22 + sy;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+
+  if (shield <= 0.995 && s.maxShield > 0) {
+    const pct = Math.round(shield * 100);
+    ctx.font = '700 10px ui-monospace, "SF Mono", Menlo, monospace';
+    ctx.fillStyle = 'rgba(120,190,255,0.95)';
+    ctx.shadowColor = 'rgba(60,150,255,0.9)';
+    ctx.shadowBlur = 6;
+    ctx.fillText('\u25c7 ' + pct + '%', x, y);
+    y -= 12;
+  }
+  if (hull <= 0.995) {
+    const pct = Math.round(hull * 100);
+    // Green through amber to red, so severity is readable without the number.
+    const col = hull > 0.6 ? 'rgba(120,240,170,0.95)'
+      : hull > 0.3 ? 'rgba(255,200,90,0.97)' : 'rgba(255,90,110,1)';
+    ctx.font = `700 ${hull < 0.3 ? 13 : 11}px ui-monospace, "SF Mono", Menlo, monospace`;
+    ctx.fillStyle = col;
+    ctx.shadowColor = col;
+    ctx.shadowBlur = 8;
+    ctx.fillText(pct + '%', x, y);
+  }
+  ctx.restore();
+};
 
 function fmtShort(n) {
   if (n < 1000) return String(Math.round(n));
