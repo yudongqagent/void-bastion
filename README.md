@@ -301,9 +301,47 @@ responsive layout for free. The world's centre is offset by however much screen
 the UI is covering, so opening the upgrade sheet on a phone slides the bastion
 up instead of hiding it behind the panel.
 
-Performance: object pools for every entity type (steady-state allocation is
-essentially zero), DPR capped at 2, DOM refreshed at ~12Hz instead of per-frame,
-and bloom intensity drops automatically if the frame rate falls below ~44fps.
+### Performance
+
+Profiling a busy wave (28 craft, 113 projectiles, 258 particles) put the whole
+simulation at **0.10 ms/frame** against a 16.7 ms budget — the CPU was never the
+problem. The cost is fill rate: a full-screen water plane, big terrain plates and
+hundreds of oversized glow quads produce heavy overdraw, and every one of those
+fragments gets shaded again by each blur pass in the bloom chain.
+
+So the optimisation targets fragments, not logic:
+
+* the world renders to a scaled framebuffer and the composite upscales it —
+  quantised so a hovering frame rate cannot thrash reallocation
+* the wide-bloom chain (two extra full-screen passes for a subtle halo) is
+  optional and is the first thing dropped
+* DPR capped at 1.75 rather than 2 — about a quarter fewer fragments, and bloom
+  hides the difference
+* halved the star count, halved the haze blobs, and terrain features outside the
+  view are culled instead of drawn while they wait to scroll in
+
+The adaptive ladder walks down wide bloom first, then resolution, and climbs
+back when there is headroom.
+
+Object pools keep steady-state allocation at essentially zero, and the DOM
+refreshes at ~12Hz rather than per frame.
+
+### Why you don't die out of nowhere
+
+Enemy damage grows exponentially with the wave; hull upgrades grow linearly. By
+the mid game one ram was ~40% of a full bar, three in a second deleted a healthy
+ship, and a hull-focused build finished only 13% tougher than a balanced one
+after 45 levels — the upgrade was barely worth buying.
+
+Three changes fix it. Hull per level went 42 → 105, so investment actually moves
+the number. `MAX_HIT_FRACTION` caps any single impact at 11% of maximum hull,
+which guarantees at least nine hits between full and dead **at any wave** and
+turns burst lethality into sustained pressure. And a short grace period after a
+capped hit stops a cluster arriving in one frame from stacking into an instant
+kill. Below a third hull the screen pulses red with an accelerating tone.
+
+Measured: time from 50% hull to death went from 10.5 s to 34 s, and maximum hull
+on a normal build from 1.9K to 5.0K.
 
 Audio is synthesised at runtime with WebAudio — oscillators, one noise buffer,
 and a master compressor. No audio files.

@@ -236,7 +236,7 @@ export const UPGRADES = {
   arc:         { tab: 'offense' , tint: 'arc', label: 'arc',      name: 'Arc Coil',       desc: 'Lightning chaining between enemies', base: 1800, growth: 1.24, add: 84, fmt: 'flat' },
   drones:      { tab: 'offense' , tint: 'wing', label: 'wingmen',  name: 'Escort Wingmen', desc: 'Wingmen firing alongside you',     base: 900,  growth: 1.55,  add: 1,   fmt: 'int', cap: 6, maxLevel: 6 },
 
-  maxHull:     { tab: 'defense', label: 'hull', name: 'Hull Plating',    desc: 'Maximum hull',               base: 30,   growth: 1.13,  add: 42,    fmt: 'flat' },
+  maxHull:     { tab: 'defense', label: 'hull', name: 'Hull Plating',    desc: 'Maximum hull',               base: 30,   growth: 1.125, add: 105,   fmt: 'flat' },
   regen:       { tab: 'defense', label: 'regen', name: 'Nanorepair',      desc: 'Hull regenerated per sec',   base: 65,   growth: 1.15,  add: 3.2,   fmt: 'rate' },
   shieldMax:   { tab: 'defense', label: 'shield', name: 'Deflector',       desc: 'Shield capacity',            base: 70,   growth: 1.14,  add: 30,    fmt: 'flat' },
   shieldRegen: { tab: 'defense', label: 'sh/s', name: 'Capacitor',       desc: 'Shield recharged per sec',   base: 95,   growth: 1.155, add: 2.4,   fmt: 'rate' },
@@ -416,6 +416,18 @@ export const TUNING = {
   // often than a ram does against a dodging autopilot — at parity, three elite
   // volleys ended a run. This is the single knob for how hard the swarm shoots.
   WEAPON_SCALE: 0.25,
+  // No single impact may take more than this share of maximum hull.
+  //
+  // Enemy damage grows exponentially with wave; hull upgrades grow linearly, so
+  // by the mid game one ram was ~40% of a full bar and three in a second could
+  // delete a healthy ship with no warning. Capping per-hit damage converts that
+  // burst lethality into sustained pressure — you always get at least
+  // 1 / MAX_HIT_FRACTION impacts, which is what makes hull investment readable
+  // as "seconds of survival" rather than an abstract number.
+  MAX_HIT_FRACTION: 0.11,
+  // Grace period after a heavy hit, so a cluster arriving in the same frame
+  // cannot stack several capped hits into an instant kill.
+  IFRAME_SECONDS: 0.32,
 };
 
 /** Cores awarded for a run that reached `maxWave`. */
@@ -489,7 +501,7 @@ export function deriveStats(up, lab, prestigeCount) {
   return {
     damage, fireRate, shots, pierce, critChance, critMult, dps,
     range:       340 + U.range.add * lv('range'),
-    maxHull:     (220 + U.maxHull.add * lv('maxHull')) * hullMult,
+    maxHull:     (300 + U.maxHull.add * lv('maxHull')) * hullMult,
     regen:       (1.5 + U.regen.add * lv('regen')) * hullMult,
     maxShield:   (0 + U.shieldMax.add * lv('shieldMax')) * hullMult,
     shieldRegen: (2 + U.shieldRegen.add * lv('shieldRegen')) * hullMult,

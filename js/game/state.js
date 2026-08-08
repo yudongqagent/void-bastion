@@ -40,6 +40,7 @@ export function freshRun(meta) {
     elapsed: 0,
     cooldowns: {},        // ability key -> seconds remaining
     over: false,
+    iframe: 0,            // grace period after a capped hit
     banked: false,        // set once bankRun() has paid this run out
     bankedCores: 0,
   };

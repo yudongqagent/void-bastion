@@ -156,8 +156,11 @@ export class Terrain {
     }
   }
 
-  render(R, pal, time) {
+  render(R, pal, time, y0, y1) {
     for (const f of this.features) {
+      // Off-screen features are still in the list waiting to scroll in; drawing
+      // them is pure overdraw on the most fill-heavy shapes in the game.
+      if (f.y + f.w < y0 - 40 || f.y - f.w > y1 + 40) continue;
       switch (f.kind) {
         case 'island': {
           for (const l of f.lobes) {

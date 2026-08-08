@@ -194,6 +194,7 @@ export class Game {
     this.shells = [];
     this.sysT = { missile: 1.2, flak: 2.0, arc: 0.9 };
     this.laserTick = 0;
+    this.warnT = 0;
 
     this.sector = sectorForWave(1, BOSS_INTERVAL);
     this._statsDirty = true;
@@ -280,7 +281,7 @@ export class Game {
     // Three parallax star layers. Depth drives both speed and brightness, which
     // is what sells "flying forward" with nothing but dots.
     this.layers = [];
-    const density = (this.fieldW * this.fieldH) / 9000;
+    const density = (this.fieldW * this.fieldH) / 16000;
     for (const [depth, size, alpha] of [[0.35, 1.0, 0.34], [0.68, 1.5, 0.55], [1.15, 2.3, 0.85]]) {
       const stars = [];
       const n = Math.max(12, Math.round(density * depth));
@@ -296,12 +297,12 @@ export class Game {
     }
 
     this.nebulae.length = 0;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 2; i++) {
       this.nebulae.push({
         x: this.x0 + Math.random() * this.fieldW,
         y: this.y0 + Math.random() * this.fieldH,
-        r: Math.min(this.fieldW, this.fieldH) * (0.4 + Math.random() * 0.5),
-        a: 0.035 + Math.random() * 0.04,
+        r: Math.min(this.fieldW, this.fieldH) * (0.32 + Math.random() * 0.3),
+        a: 0.05 + Math.random() * 0.04,
         depth: 0.14 + Math.random() * 0.12,
       });
     }
@@ -982,8 +983,19 @@ export class Game {
   damageShip(amount, source) {
     const { run } = this.state;
     if (this.buffs.aegis > 0) { this.synth.shieldHit(); return; }
+    if ((run.iframe || 0) > 0) return;
     const s = this.stats;
     let dmg = amount * (1 - s.armor);
+
+    // Cap the bite of any single impact, then grant brief grace. Together these
+    // guarantee a minimum number of hits — and therefore seconds — between full
+    // hull and death, instead of an exponential ram deleting you in one frame.
+    const cap = s.maxHull * TUNING.MAX_HIT_FRACTION;
+    if (dmg > cap) {
+      dmg = cap;
+      run.iframe = TUNING.IFRAME_SECONDS;
+      this.shake(9);
+    }
 
     if (run.shield > 0) {
       const absorbed = Math.min(run.shield, dmg);
@@ -1829,6 +1841,22 @@ export class Game {
   updateRegen(dt) {
     const { run } = this.state;
     const s = this.stats;
+    if (run.iframe > 0) run.iframe = Math.max(0, run.iframe - dt);
+
+    // Low-hull warning: an accelerating pulse and tone, so a run never simply
+    // stops without the player having seen it coming.
+    const frac = run.hull / s.maxHull;
+    if (frac < 0.32 && !run.over) {
+      this.warnT = (this.warnT || 0) - dt;
+      if (this.warnT <= 0) {
+        this.warnT = 0.28 + frac * 1.4;
+        this.flash([0.55, 0.05, 0.09], 0.26);
+        this.synth.denied();
+      }
+    } else {
+      this.warnT = 0;
+    }
+
     if (run.hull < s.maxHull) run.hull = Math.min(s.maxHull, run.hull + s.regen * dt);
     if (run.shield < s.maxShield) run.shield = Math.min(s.maxShield, run.shield + s.shieldRegen * dt);
   }
@@ -1858,7 +1886,7 @@ export class Game {
     const pal = groundFor(this.sector.id);
     this.terrain.renderWater(R, pal, time, this.x0, this.x1, this.y0, this.y1, this.scroll);
     this.renderBackdrop(time);
-    this.terrain.render(R, pal, time);
+    this.terrain.render(R, pal, time, this.y0, this.y1);
     this.renderDebris();
     this.renderPickups(time);
     this.renderEnemies(time);

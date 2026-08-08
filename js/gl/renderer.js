@@ -284,6 +284,14 @@ export class Renderer {
     this.width = 0;
     this.height = 0;
     this.dpr = 1;
+    // Scene resolution scale. The bloom chain is fill-rate bound — a full-screen
+    // water plane, big terrain plates and hundreds of oversized glow quads add up
+    // to heavy overdraw, and every one of those fragments is shaded again by each
+    // blur pass. Rendering the world slightly below native and letting the
+    // composite upscale is by far the cheapest lever, and bloom hides the
+    // softness almost completely.
+    this.quality = 1;
+    this.wideBloom = true;
 
     this.shake = [0, 0];
     this.flash = [0, 0, 0];
@@ -338,7 +346,6 @@ export class Renderer {
   }
 
   resize(cssWidth, cssHeight, dpr) {
-    const gl = this.gl;
     const w = Math.max(2, Math.floor(cssWidth * dpr));
     const h = Math.max(2, Math.floor(cssHeight * dpr));
     if (w === this.width && h === this.height) return;
@@ -347,17 +354,35 @@ export class Renderer {
     this.cssWidth = cssWidth; this.cssHeight = cssHeight;
     this.canvas.width = w;
     this.canvas.height = h;
+    this._buildTargets();
+  }
 
+  /**
+   * @param {number} q 1 = native, lower renders the world smaller and upscales
+   *   in the composite. Quantised so a hovering frame rate cannot thrash
+   *   framebuffer reallocation every second.
+   */
+  setQuality(q) {
+    const next = Math.max(0.5, Math.min(1, Math.round(q * 20) / 20));
+    if (next === this.quality) return;
+    this.quality = next;
+    if (this.width) this._buildTargets();
+  }
+
+  _buildTargets() {
+    const gl = this.gl;
     if (this.targets) {
       for (const t of Object.values(this.targets)) {
         gl.deleteTexture(t.tex);
         gl.deleteFramebuffer(t.fbo);
       }
     }
-    const hw = Math.max(1, w >> 1), hh = Math.max(1, h >> 1);
-    const qw = Math.max(1, w >> 2), qh = Math.max(1, h >> 2);
+    const rw = this.renderW = Math.max(2, Math.floor(this.width * this.quality));
+    const rh = this.renderH = Math.max(2, Math.floor(this.height * this.quality));
+    const hw = Math.max(1, rw >> 1), hh = Math.max(1, rh >> 1);
+    const qw = Math.max(1, rw >> 2), qh = Math.max(1, rh >> 2);
     this.targets = {
-      scene: this._makeTarget(w, h),
+      scene: this._makeTarget(rw, rh),
       bright: this._makeTarget(hw, hh),
       blurA: this._makeTarget(hw, hh),
       blurB: this._makeTarget(qw, qh),
@@ -432,7 +457,7 @@ export class Renderer {
 
     // --- scene pass, additive, into the HDR target -------------------------
     gl.bindFramebuffer(gl.FRAMEBUFFER, T.scene.fbo);
-    gl.viewport(0, 0, this.width, this.height);
+    gl.viewport(0, 0, this.renderW, this.renderH);
     gl.clearColor(clearRGB[0], clearRGB[1], clearRGB[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
@@ -477,7 +502,9 @@ export class Renderer {
       gl.uniform1f(this.uBright.u_threshold, this.bloomThreshold);
     });
 
-    // Half-res blur, then a quarter-res blur for a wider, softer halo.
+    // Half-res blur, then optionally a quarter-res pass for a wider halo. The
+    // wide chain is two more full-screen passes for a subtle effect, so it is
+    // the first thing dropped when frames get expensive.
     pass(T.blurA, this.progBlur, () => {
       bind(0, T.bright.tex, this.uBlur.u_tex);
       gl.uniform2f(this.uBlur.u_dir, 1 / T.bright.w, 0);
@@ -486,19 +513,21 @@ export class Renderer {
       bind(0, T.blurA.tex, this.uBlur.u_tex);
       gl.uniform2f(this.uBlur.u_dir, 0, 1 / T.blurA.h);
     });
-    pass(T.blurB, this.progBlur, () => {
-      bind(0, T.bright.tex, this.uBlur.u_tex);
-      gl.uniform2f(this.uBlur.u_dir, 1.6 / T.bright.w, 0);
-    });
-    pass(T.blurC, this.progBlur, () => {
-      bind(0, T.blurB.tex, this.uBlur.u_tex);
-      gl.uniform2f(this.uBlur.u_dir, 0, 1.6 / T.blurB.h);
-    });
+    if (this.wideBloom) {
+      pass(T.blurB, this.progBlur, () => {
+        bind(0, T.bright.tex, this.uBlur.u_tex);
+        gl.uniform2f(this.uBlur.u_dir, 1.6 / T.bright.w, 0);
+      });
+      pass(T.blurC, this.progBlur, () => {
+        bind(0, T.blurB.tex, this.uBlur.u_tex);
+        gl.uniform2f(this.uBlur.u_dir, 0, 1.6 / T.blurB.h);
+      });
+    }
 
     pass(null, this.progComposite, () => {
       bind(0, T.scene.tex, this.uComposite.u_scene);
       bind(1, T.bright.tex, this.uComposite.u_bloom);
-      bind(2, T.blurC.tex, this.uComposite.u_bloom2);
+      bind(2, (this.wideBloom ? T.blurC : T.bright).tex, this.uComposite.u_bloom2);
       gl.uniform1f(this.uComposite.u_intensity, this.bloomIntensity);
       gl.uniform3f(this.uComposite.u_flash, this.flash[0], this.flash[1], this.flash[2]);
       gl.uniform1f(this.uComposite.u_vignette, this.vignette);

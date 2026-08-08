@@ -54,7 +54,7 @@ function resize() {
   if (w < 2 || h < 2) return false;
   // Cap DPR: a 3x phone display at full res costs ~9x the fill rate for a
   // difference nobody can see through bloom and scanlines.
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
   if (w === lastW && h === lastH && dpr === lastDpr) return true;
   lastW = w; lastH = h; lastDpr = dpr;
 
@@ -234,15 +234,22 @@ function frame(now) {
     ui.refresh();
   }
 
-  // Adaptive quality: if we cannot hold ~50fps, drop the expensive wide bloom
-  // pass before we start dropping frames outright.
+  // Adaptive quality. The bottleneck is fill rate, not CPU, so the ladder walks
+  // down the most expensive things first: the extra wide-bloom passes, then the
+  // resolution the world is rendered at. Both are far less noticeable than a
+  // dropped frame, and it climbs back once there is headroom.
   frames++;
   fpsAccum += dt;
-  if (fpsAccum >= 1) {
+  if (fpsAccum >= 1.2) {
     const fps = frames / fpsAccum;
     frames = 0; fpsAccum = 0;
-    if (fps < 44 && renderer.bloomIntensity > 0.35) renderer.bloomIntensity = 0.35;
-    else if (fps > 56 && renderer.bloomIntensity < 0.62) renderer.bloomIntensity = 0.62;
+    if (fps < 50) {
+      if (renderer.wideBloom) renderer.wideBloom = false;
+      else renderer.setQuality(renderer.quality - 0.1);
+    } else if (fps > 58) {
+      if (renderer.quality < 1) renderer.setQuality(renderer.quality + 0.05);
+      else if (!renderer.wideBloom) renderer.wideBloom = true;
+    }
   }
 
   state.tickSave(now);
