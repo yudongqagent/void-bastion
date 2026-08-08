@@ -167,15 +167,22 @@ export class UI {
       const el = document.createElement('div');
       el.className = 'up';
       el.dataset.key = key;
+      // One markup shape for both layouts. On phones this stacks into a compact
+      // two-per-row card and the description is hidden by CSS; on desktop the
+      // same nodes lay out as a wide row with the description showing.
+      el.title = `${u.name} — ${u.desc}`;
       el.innerHTML = `
         <div class="up-main">
-          <div class="up-name">${u.name}<span class="up-lv">Lv 0</span></div>
+          <div class="up-head">
+            <span class="up-name">${u.name}</span>
+            <span class="up-lv">Lv 0</span>
+          </div>
           <div class="up-desc">${u.desc}</div>
           <div class="up-val"></div>
         </div>
         <div class="up-buy">
-          <div class="up-cost">0</div>
-          <div class="up-qty"></div>
+          <span class="up-cost">0</span>
+          <span class="up-qty"></span>
         </div>`;
       frag.appendChild(el);
       this.rows.set(key, {
@@ -212,6 +219,7 @@ export class UI {
       const plan = this.purchasePlan(key);
       const maxed = plan === null;
       r.lv.textContent = maxed ? 'MAX' : 'Lv ' + lvl;
+      r.lv.classList.toggle('is-max', maxed);
       r.val.textContent = statText(key, stats);
       if (maxed) {
         r.cost.textContent = '—';

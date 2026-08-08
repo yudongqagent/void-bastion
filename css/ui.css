@@ -20,7 +20,7 @@
   --safe-t:    env(safe-area-inset-top, 0px);
   /* The upgrade panel is permanent furniture, not a popup. Its height is a
      variable because both the panel and the ability row above it depend on it. */
-  --panel-h: clamp(230px, 45vh, 430px);
+  --panel-h: clamp(206px, 42vh, 400px);
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -74,7 +74,7 @@ html, body {
   position: fixed;
   top: 0; left: 0; right: 0;
   z-index: 10;
-  padding: calc(var(--safe-t) + 8px) 10px 8px;
+  padding: calc(var(--safe-t) + 6px) 9px 7px;
   background: linear-gradient(to bottom, rgba(4,6,14,0.94) 55%, rgba(4,6,14,0));
   pointer-events: none;
 }
@@ -141,7 +141,7 @@ html, body {
 .chip:active { background: rgba(77, 240, 255, 0.2); }
 .chip.off { color: var(--text-dim); border-color: rgba(124,150,166,0.25); }
 
-.bars { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+.bars { display: flex; flex-direction: column; gap: 3px; margin-top: 5px; }
 .bar {
   position: relative;
   height: 13px;
@@ -188,7 +188,7 @@ html, body {
 .ability {
   pointer-events: auto;
   position: relative;
-  width: 54px; height: 54px;
+  width: 52px; height: 50px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: rgba(8, 18, 32, 0.9);
@@ -238,7 +238,7 @@ html, body {
   padding-bottom: var(--safe-b);
 }
 
-.tabs { display: flex; gap: 4px; padding: 10px 10px 0; flex: none; }
+.tabs { display: flex; gap: 4px; padding: 8px 10px 0; flex: none; }
 .tab {
   flex: 1;
   padding: 8px 4px;
@@ -258,7 +258,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 7px 10px 4px;
+  padding: 5px 10px 3px;
   font-size: 9.5px;
   letter-spacing: 0.1em;
   color: var(--text-dim);
@@ -280,57 +280,99 @@ html, body {
 .upgrade-list {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 4px 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  padding: 4px 8px 12px;
+  /* Two per row on phones: an upgrade card only needs to say name, level,
+     current value and price, and halving the rows means twice as much of the
+     tree is reachable without scrolling. */
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  align-content: start;
 }
 
 .up {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 8px 6px;
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid rgba(255, 255, 255, 0.07);
-  border-left: 2px solid var(--cyan-dim);
-  border-radius: 7px;
+  border-radius: 8px;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s;
+  transition: background 0.12s, border-color 0.12s, transform 0.08s;
 }
-.up.afford { border-left-color: var(--cyan); background: rgba(77, 240, 255, 0.075); }
-.up.afford:active { background: rgba(77, 240, 255, 0.2); }
-.up.maxed { opacity: 0.5; border-left-color: var(--gold); cursor: default; }
 .up-main { min-width: 0; }
-.up-name {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  color: var(--text);
+.up-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 5px;
+}
+.up-name {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .up-lv {
+  flex: none;
+  min-width: 20px;
+  padding: 1px 5px;
   font-size: 9.5px;
   font-weight: 700;
+  text-align: center;
   color: var(--cyan);
-  background: rgba(77, 240, 255, 0.12);
-  padding: 1px 5px;
+  background: rgba(77, 240, 255, 0.13);
   border-radius: 3px;
 }
-.up-desc { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
-.up-val { font-size: 10px; color: var(--green); margin-top: 2px; font-variant-numeric: tabular-nums; }
-.up-buy { text-align: right; white-space: nowrap; }
+.up-lv.is-max { color: var(--gold); background: rgba(255, 201, 77, 0.15); }
+.up-desc { display: none; font-size: 10px; color: var(--text-dim); }
+.up-val {
+  font-size: 11px;
+  color: var(--green);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The price doubles as the button face, so affordability is unmistakable. */
+.up-buy {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 1px;
+  padding: 5px 4px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.05);
+}
 .up-cost {
   font-size: 12px;
   font-weight: 700;
-  color: var(--gold);
   font-variant-numeric: tabular-nums;
+  color: #6a5a3a;
 }
-.up.poor .up-cost { color: #6a5a3a; }
-.up-qty { font-size: 9px; color: var(--text-dim); }
+.up-qty { font-size: 9px; opacity: 0.75; }
+
+.up.afford { border-color: rgba(77, 240, 255, 0.4); }
+.up.afford .up-buy {
+  background: linear-gradient(180deg, #6ff6ff, #22c2d8);
+  box-shadow: 0 0 12px rgba(77, 240, 255, 0.3);
+}
+.up.afford .up-cost, .up.afford .up-qty { color: #041018; }
+.up.afford:active { transform: scale(0.97); }
+.up.poor { opacity: 0.72; }
+.up.maxed {
+  opacity: 0.55;
+  border-color: rgba(255, 201, 77, 0.28);
+  cursor: default;
+}
+.up.maxed .up-buy { background: rgba(255, 255, 255, 0.03); }
+.up.maxed .up-cost { color: var(--gold); }
 
 /* ── modals ───────────────────────────────────────────────────── */
 
@@ -382,6 +424,45 @@ html, body {
 .core-banner strong { font-size: 17px; font-variant-numeric: tabular-nums; }
 
 .lab-list { display: flex; flex-direction: column; gap: 5px; }
+/* Lab entries reuse the .up card but sit in a roomy modal, so they keep the
+   original wide-row shape rather than the compact two-up phone card. */
+.lab-list .up {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+.lab-list .up-name { display: flex; align-items: center; gap: 6px; white-space: normal; }
+.lab-list .up-desc { display: block; }
+.lab-list .up-val { white-space: normal; }
+/* These have to out-specify `.up.afford .up-buy` (three classes), or lab rows
+   inherit the phone card's filled cyan button and collapse to a ~27px column. */
+.lab-list .up .up-buy,
+.lab-list .up.afford .up-buy,
+.lab-list .up.maxed .up-buy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0;
+  min-width: 56px;
+  margin: 0;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+  text-align: right;
+}
+.lab-list .up .up-cost,
+.lab-list .up.afford .up-cost { font-size: 13px; }
+.lab-list .up .up-qty,
+.lab-list .up.afford .up-qty {
+  color: var(--text-dim);
+  font-size: 9px;
+  opacity: 1;
+}
+.lab-list .up.afford { background: rgba(176, 107, 255, 0.09); border-color: rgba(176,107,255,0.34); }
+.lab-list .up.afford:active { background: rgba(176, 107, 255, 0.2); }
 
 .ascend-figure {
   display: flex; align-items: center; justify-content: space-around; gap: 8px;
@@ -500,7 +581,23 @@ kbd {
     padding-bottom: 0;
   }
   .tabs { padding-top: 14px; }
-  .upgrade-list { padding-bottom: 16px; }
+  /* The right-hand column is only ~330px wide — two cards would be cramped, and
+     there is vertical room to spare, so desktop goes back to one wide row each
+     with the description shown. */
+  .upgrade-list {
+    grid-template-columns: 1fr;
+    padding: 4px 10px 16px;
+  }
+  .up {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  .up-desc { display: block; }
+  .up-name { white-space: normal; }
+  .up-buy { min-width: 74px; margin-top: 0; padding: 6px 8px; }
   .stat strong { font-size: 19px; }
   .bar { height: 15px; }
   .bar span { line-height: 15px; font-size: 10px; }
