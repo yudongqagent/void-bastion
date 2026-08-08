@@ -174,7 +174,7 @@ uniform float u_vignette;
 out vec4 outColor;
 void main() {
   vec3 scene = texture(u_scene, v_uv).rgb;
-  vec3 bloom = texture(u_bloom, v_uv).rgb + texture(u_bloom2, v_uv).rgb * 0.7;
+  vec3 bloom = texture(u_bloom, v_uv).rgb + texture(u_bloom2, v_uv).rgb * 0.45;
   vec3 c = scene + bloom * u_intensity + u_flash;
 
   // Soft shoulder rather than a hard clamp: highlights roll off to white
@@ -256,8 +256,8 @@ export class Renderer {
 
     this.shake = [0, 0];
     this.flash = [0, 0, 0];
-    this.bloomIntensity = 1.15;
-    this.bloomThreshold = 0.78;
+    this.bloomIntensity = 0.62;
+    this.bloomThreshold = 0.95;
     this.vignette = 0.55;
   }
 

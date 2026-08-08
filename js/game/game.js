@@ -71,6 +71,11 @@ const COLORS = {
   coin:     [1.50, 1.15, 0.35],
   repair:   [0.30, 1.45, 0.70],
   debris:   [0.42, 0.40, 0.46],
+  laser:    [0.45, 1.35, 1.75],
+  missile:  [1.60, 0.80, 0.25],
+  flak:     [1.55, 1.10, 0.30],
+  arc:      [0.75, 0.70, 1.90],
+  wing:     [0.35, 1.45, 0.95],
 };
 
 function fastPool(factory, initial) {
@@ -110,7 +115,7 @@ const newEnemy = () => ({
 const newBullet = () => ({
   active: false, x: 0, y: 0, vx: 0, vy: 0, dmg: 0, pierce: 1, life: 0,
   crit: false, radius: 3, hits: null, fromEnemy: false,
-  homing: 0, drag: 0, minSpeed: 0, missile: false,
+  homing: 0, drag: 0, minSpeed: 0, missile: false, system: null,
 });
 
 const newParticle = () => ({
@@ -182,6 +187,7 @@ export class Game {
     this.stormTimer = 5;
     this.beams = [];
     this.arcs = [];
+    this.shells = [];
     this.sysT = { missile: 1.2, flak: 2.0, arc: 0.9 };
     this.laserTick = 0;
 
@@ -739,6 +745,7 @@ export class Game {
       b.life = 2.2;
       b.radius = crit ? 5 : 3.2;
       b.fromEnemy = false;
+      b.system = null;
       b.hits = b.hits || new Set();
       b.hits.clear();
     }
@@ -1274,9 +1281,12 @@ export class Game {
           b.vx += ((hx / hd) * sp - b.vx) * k;
           b.vy += ((hy / hd) * sp - b.vy) * k;
         }
-        if (Math.random() < dt * 40) {
-          this.spawnParticle(b.x, b.y, -b.vx * 0.1, -b.vy * 0.1, 0.3, 3.2,
-            [1.4, 0.8, 0.35], 0.9, 1);
+        // Dense exhaust: the trail is what makes a missile read as a missile.
+        if (Math.random() < dt * 90) {
+          this.spawnParticle(b.x - b.vx * 0.02, b.y - b.vy * 0.02,
+            -b.vx * 0.12 + (Math.random() - 0.5) * 40,
+            -b.vy * 0.12 + (Math.random() - 0.5) * 40,
+            0.42, 4.4, COLORS.missile, 0.92, 1);
         }
       }
 
@@ -1451,7 +1461,7 @@ export class Game {
     if (s.drones <= 0) return;
     this.wingAngle += dt;
 
-    const rate = s.fireRate * SYSTEM.wingFraction * (this.buffs.overdrive > 0 ? 2.5 : 1);
+    const rate = s.fireRate * s.wingRate * (this.buffs.overdrive > 0 ? 2.5 : 1);
     this.wingTimer = (this.wingTimer || 0) - dt;
     if (this.wingTimer > 0) return;
     this.wingTimer += 1 / Math.max(0.1, rate);
@@ -1472,6 +1482,7 @@ export class Game {
       b.radius = crit ? 4 : 2.6;
       b.fromEnemy = false;
       b.homing = 0; b.drag = 0; b.missile = false;
+      b.system = 'wing';
       b.hits = b.hits || new Set();
       b.hits.clear();
     }
@@ -1499,6 +1510,7 @@ export class Game {
     if (s.missileDmg > 0) this.updateMissiles(dt, s);
     if (s.flakDmg > 0) this.updateFlak(dt, s);
     if (s.arcDmg > 0) this.updateArc(dt, s);
+    this.updateShells(dt);
 
     for (let i = this.arcs.length - 1; i >= 0; i--) {
       this.arcs[i].t -= dt;
@@ -1547,20 +1559,29 @@ export class Game {
       b.x = this.ship.x + side * 12;
       b.y = this.ship.y + 4;
       // Lobbed outward first, then it turns and hunts — reads as a launch.
-      const ang = -Math.PI / 2 + side * (0.5 + Math.random() * 0.3);
-      b.vx = Math.cos(ang) * 260;
-      b.vy = Math.sin(ang) * 260;
+      const ang = -Math.PI / 2 + side * (0.7 + Math.random() * 0.35);
+      // Launched slowly and sideways so the arc-over is actually watchable;
+      // homing then hauls them onto the target.
+      b.vx = Math.cos(ang) * 170;
+      b.vy = Math.sin(ang) * 170;
       b.dmg = s.missileDmg;
       b.crit = false;
       b.pierce = 1;
       b.life = 4.5;
-      b.radius = 5;
+      b.radius = 6.5;
       b.fromEnemy = false;
-      b.homing = 3.2;
+      b.system = 'missile';
+      b.homing = 2.6;
       b.drag = 0;
       b.missile = true;
       b.hits = b.hits || new Set();
       b.hits.clear();
+      // Launch puff, so a salvo announces itself.
+      for (let k = 0; k < 4; k++) {
+        this.spawnParticle(b.x, b.y, Math.cos(ang) * -90 + (Math.random() - 0.5) * 70,
+          Math.sin(ang) * -90 + (Math.random() - 0.5) * 70, 0.25,
+          3.5, COLORS.missile, 0.9, 1);
+      }
     }
     this.synth.ability();
   }
@@ -1585,17 +1606,56 @@ export class Game {
     if (!best) return;
     this.sysT.flak += SYSTEM.flakCd;
 
-    let hit = 0;
-    for (const e of this.enemies.items) {
-      if (!e.active) continue;
-      if (Math.hypot(e.x - best.x, e.y - best.y) > s.flakRadius) continue;
-      this.damageEnemy(e, s.flakDmg, false, false);
-      hit++;
+    // Lob a visible shell that travels to the target, then bursts. Detonating
+    // instantly at a distant point read as a random flash with no cause.
+    this.shells.push({
+      x: this.ship.x, y: this.ship.y - 10,
+      x0: this.ship.x, y0: this.ship.y - 10,
+      tx: best.x, ty: best.y,
+      t: 0, dur: 0.34, dmg: s.flakDmg, radius: s.flakRadius,
+    });
+    this.synth.shot(0.45);
+  }
+
+  /** Flak shells in flight, and their airbursts. */
+  updateShells(dt) {
+    for (let i = this.shells.length - 1; i >= 0; i--) {
+      const sh = this.shells[i];
+      sh.t += dt;
+      const k = Math.min(1, sh.t / sh.dur);
+      sh.x = sh.x0 + (sh.tx - sh.x0) * k;
+      sh.y = sh.y0 + (sh.ty - sh.y0) * k;
+      if (Math.random() < dt * 60) {
+        this.spawnParticle(sh.x, sh.y, (Math.random() - 0.5) * 50, (Math.random() - 0.5) * 50,
+          0.22, 3, COLORS.flak, 0.9, 1);
+      }
+      if (k < 1) continue;
+
+      let hit = 0;
+      for (const e of this.enemies.items) {
+        if (!e.active) continue;
+        if (Math.hypot(e.x - sh.x, e.y - sh.y) > sh.radius) continue;
+        this.damageEnemy(e, sh.dmg, false, false);
+        hit++;
+      }
+      // Two rings plus shrapnel: the burst radius is information, so it is
+      // drawn at its real size rather than as a generic puff.
+      this.spawnRing(sh.x, sh.y, sh.radius, COLORS.flak, 0.42);
+      this.spawnRing(sh.x, sh.y, sh.radius * 0.6, COLORS.flak, 0.28);
+      this.spawnExplosion(sh.x, sh.y, 20, COLORS.flak, false);
+      for (let n = 0; n < 14; n++) {
+        const a = Math.random() * TAU;
+        const sp = 150 + Math.random() * 260;
+        this.spawnParticle(sh.x, sh.y, Math.cos(a) * sp, Math.sin(a) * sp,
+          0.3 + Math.random() * 0.25, 3.2, COLORS.flak, 0.9, 1);
+      }
+      if (hit) {
+        this.addFloater(sh.x, sh.y - 8, fmtShort(sh.dmg) + ' x' + hit, COLORS.flak, 1.05);
+      }
+      this.shake(3);
+      this.synth.kill(false);
+      this.shells.splice(i, 1);
     }
-    this.spawnRing(best.x, best.y, s.flakRadius, [1.5, 0.9, 0.3], 0.4);
-    this.spawnExplosion(best.x, best.y, 16, [1.5, 0.9, 0.3], false);
-    if (hit) this.addFloater(best.x, best.y, fmtShort(s.flakDmg), [1.5, 1.0, 0.35], 1.0);
-    this.synth.kill(false);
   }
 
   /** Lightning that walks from target to target. */
@@ -2052,7 +2112,18 @@ export class Game {
       R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, 7 + wob, 0.35, 1.25, 1.7, 0.55, 0.85);
       R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, 2.4, 1.6, 1.9, 2.0, 0.95, 0.5);
       R.glow(t.x, t.y, 26 + wob * 2, 0.5, 1.4, 1.8, 0.6, 1.6);
+      R.ring(t.x, t.y, t.radius + 6 + Math.sin(time * 18) * 2, 1.5,
+        0.6, 1.5, 1.9, 0.7);
       R.glow(this.ship.x, this.ship.y - 14, 16, 0.5, 1.4, 1.8, 0.55, 1.7);
+    }
+
+    for (const sh of this.shells) {
+      const k = Math.min(1, sh.t / sh.dur);
+      R.glow(sh.x, sh.y, 13, 1.6, 1.15, 0.35, 0.85, 1.6);
+      R.disc(sh.x, sh.y, 3.6, 1.7, 1.35, 0.5, 1);
+      // Ghost ring at the aim point shows where it is about to go off.
+      R.ring(sh.tx, sh.ty, sh.radius * (0.5 + k * 0.5), 1.3,
+        1.5, 1.05, 0.3, 0.14 + k * 0.3);
     }
 
     for (const a of this.arcs) {
@@ -2103,7 +2174,16 @@ export class Game {
       // a plain shot the instant it appears.
       const c = b.fromEnemy
         ? (b.homing > 0 ? [1.7, 0.35, 0.85] : [1.5, 0.5, 0.25])
-        : (b.missile ? [1.6, 0.95, 0.4] : b.crit ? [1.6, 1.3, 0.5] : COLORS.bullet);
+        : b.system ? COLORS[b.system]
+        : b.crit ? [1.6, 1.3, 0.5] : COLORS.bullet;
+      if (b.missile) {
+        const ang = Math.atan2(b.vy, b.vx);
+        R.spark(b.x, b.y, 11, 4, ang, c[0], c[1], c[2], 0.95);
+        R.glow(b.x, b.y, 17, c[0], c[1], c[2], 0.7, 1.7);
+        R.glow(b.x - Math.cos(ang) * 11, b.y - Math.sin(ang) * 11, 9,
+          1.7, 1.3, 0.5, 0.75, 1.5);
+        continue;
+      }
       const tail = 0.026;
       R.beam(b.x - b.vx * tail, b.y - b.vy * tail, b.x, b.y, b.radius * 1.5,
         c[0], c[1], c[2], 0.85, 0.9);
@@ -2202,11 +2282,12 @@ export class Game {
     R.poly(x, y, 15, 3, -Math.PI / 2 + bank * 0.28, c[0] * lit, c[1] * lit, c[2] * lit, 1);
     R.disc(x, y + 2, 5.5, 1.7, 1.9, 2.0, 1);
 
+    const wc = COLORS.wing;
     for (let i = 0; i < s.drones; i++) {
       const [wx, wy] = this.wingmanPos(i, s.drones);
-      R.glow(wx, wy, 14, c[0], c[1], c[2], 0.42, 1.8);
-      R.poly(wx, wy, 6.5, 3, -Math.PI / 2 + bank * 0.25, c[0] * 0.8, c[1] * 0.8, c[2] * 0.8, 1);
-      R.glow(wx, wy + 7, 5, c[0], c[1], c[2], 0.5, 1.6);
+      R.glow(wx, wy, 14, wc[0], wc[1], wc[2], 0.4, 1.8);
+      R.poly(wx, wy, 6.5, 3, -Math.PI / 2 + bank * 0.25, wc[0] * 0.75, wc[1] * 0.75, wc[2] * 0.75, 1);
+      R.glow(wx, wy + 7, 5, wc[0], wc[1], wc[2], 0.5, 1.6);
     }
   }
 

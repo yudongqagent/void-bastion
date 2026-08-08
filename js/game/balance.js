@@ -188,14 +188,14 @@ export const UPGRADES = {
   critMult:    { tab: 'offense', label: 'crit dmg', name: 'Overcharge',      desc: 'Critical damage multiplier', base: 130,  growth: 1.155, add: 0.16,  fmt: 'mult' },
   multishot:   { tab: 'offense', label: 'shots', name: 'Split Barrel',    desc: 'Extra projectiles per shot', base: 420,  growth: 1.30,  add: 1,     fmt: 'int', cap: 8, maxLevel: 8 },
   pierce:      { tab: 'offense', label: 'pierce', name: 'Rail Coil',       desc: 'Enemies pierced per shot',   base: 380,  growth: 1.34,  add: 1,     fmt: 'int', cap: 9, maxLevel: 9 },
-  // --- weapon systems: level 0 means "not owned yet" ---------------------
-  laser:       { tab: 'weapons', label: 'laser',    name: 'Pulse Laser',    desc: 'Continuous beam on your target',   base: 700,  growth: 1.20,  add: 62,  fmt: 'flat' },
-  missiles:    { tab: 'weapons', label: 'missile',  name: 'Seeker Pod',     desc: 'Homing missiles, more per level',  base: 1000, growth: 1.24,  add: 55,  fmt: 'flat' },
-  flak:        { tab: 'weapons', label: 'flak',     name: 'Flak Cannon',    desc: 'Airbursts over enemy clusters',    base: 1400, growth: 1.23,  add: 105, fmt: 'flat' },
-  arc:         { tab: 'weapons', label: 'arc',      name: 'Arc Coil',       desc: 'Lightning chaining between enemies', base: 1800, growth: 1.24, add: 84, fmt: 'flat' },
-  drones:      { tab: 'weapons', label: 'wingmen',  name: 'Escort Wingmen', desc: 'Wingmen firing alongside you',     base: 900,  growth: 1.55,  add: 1,   fmt: 'int', cap: 6, maxLevel: 6 },
-
   range:       { tab: 'offense', label: 'range', name: 'Sensor Array',    desc: 'How far up the lane you track', base: 55, growth: 1.135, add: 11,    fmt: 'flat' },
+
+  // --- weapon systems: level 0 means "not owned yet" ---------------------
+  laser:       { tab: 'offense' , tint: 'laser', label: 'laser',    name: 'Pulse Laser',    desc: 'Continuous beam on your target',   base: 700,  growth: 1.20,  add: 62,  fmt: 'flat' },
+  missiles:    { tab: 'offense' , tint: 'missile', label: 'missile',  name: 'Seeker Pod',     desc: 'Homing missiles, more per level',  base: 1000, growth: 1.24,  add: 55,  fmt: 'flat' },
+  flak:        { tab: 'offense' , tint: 'flak', label: 'flak',     name: 'Flak Cannon',    desc: 'Airbursts over enemy clusters',    base: 1400, growth: 1.23,  add: 105, fmt: 'flat' },
+  arc:         { tab: 'offense' , tint: 'arc', label: 'arc',      name: 'Arc Coil',       desc: 'Lightning chaining between enemies', base: 1800, growth: 1.24, add: 84, fmt: 'flat' },
+  drones:      { tab: 'offense' , tint: 'wing', label: 'wingmen',  name: 'Escort Wingmen', desc: 'Wingmen firing alongside you',     base: 900,  growth: 1.55,  add: 1,   fmt: 'int', cap: 6, maxLevel: 6 },
 
   maxHull:     { tab: 'defense', label: 'hull', name: 'Hull Plating',    desc: 'Maximum hull',               base: 30,   growth: 1.13,  add: 42,    fmt: 'flat' },
   regen:       { tab: 'defense', label: 'regen', name: 'Nanorepair',      desc: 'Hull regenerated per sec',   base: 65,   growth: 1.15,  add: 3.2,   fmt: 'rate' },
@@ -272,6 +272,11 @@ export const LAB = {
   // is priced low and deliberately does not touch any reward.
   labSpeed:     { name: 'Temporal Rig', label: 'max speed',     desc: 'Maximum simulation speed',    base: 40, growth: 3.20, add: 1, maxLevel: 3 },
   labCoreYield: { name: 'Core Extraction', label: 'cores',  desc: 'Cores earned per run',        base: 30, growth: 1.30, mul: 1.12 },
+  labLaser:     { name: 'Beam Focusing',  label: 'laser',    desc: 'Pulse Laser damage',          base: 16, growth: 1.20, mul: 1.11 },
+  labMissile:   { name: 'Warhead Design', label: 'missile',  desc: 'Seeker Pod damage',           base: 18, growth: 1.20, mul: 1.11 },
+  labFlak:      { name: 'Shrapnel Load',  label: 'flak',     desc: 'Flak damage and burst radius',base: 20, growth: 1.21, mul: 1.10 },
+  labArc:       { name: 'Conduction',     label: 'arc',      desc: 'Arc damage, +1 jump per 3 lv',base: 22, growth: 1.21, mul: 1.10 },
+  labWing:      { name: 'Wing Command',   label: 'wingmen',  desc: 'Wingman rate of fire',        base: 24, growth: 1.22, mul: 1.09 },
   labOffline:   { name: 'Autopilot', label: 'offline',        desc: 'Offline coin generation',     base: 25, growth: 1.28, mul: 1.25 },
 };
 
@@ -407,6 +412,14 @@ export function deriveStats(up, lab, prestigeCount) {
   const lv = (k) => up[k] || 0;
   const U = UPGRADES;
 
+  // Per-system permanent research. Each weapon has its own Lab track, so a
+  // player can specialise a build rather than every Core going into raw damage.
+  const wLaser   = labMult('labLaser',   lab.labLaser);
+  const wMissile = labMult('labMissile', lab.labMissile);
+  const wFlak    = labMult('labFlak',    lab.labFlak);
+  const wArc     = labMult('labArc',     lab.labArc);
+  const wWing    = labMult('labWing',    lab.labWing);
+
   const critChance = Math.min(U.critChance.cap, 0.03 + U.critChance.add * lv('critChance'));
   const critMult   = (1.6 + U.critMult.add * lv('critMult')) * critLab;
 
@@ -422,16 +435,16 @@ export function deriveStats(up, lab, prestigeCount) {
   // Every auto-firing system folded in, so `dps` means total output. Wingmen
   // fire real guns at a fraction of the ship's rate; the rest are on timers.
   const wingCount = Math.min(U.drones.cap, lv('drones'));
-  const wingDps = wingCount * damage * fireRate * SYSTEM.wingFraction * critFactor;
-  const laserDps = U.laser.add * lv('laser') * dmgMult;
+  const wingDps = wingCount * damage * fireRate * SYSTEM.wingFraction * wWing * critFactor;
+  const laserDps = U.laser.add * lv('laser') * dmgMult * wLaser;
   const missileLv = lv('missiles');
   const missileDps = missileLv
-    ? ((150 + U.missiles.add * missileLv) * dmgMult *
+    ? ((150 + U.missiles.add * missileLv) * dmgMult * wMissile *
         Math.min(5, 1 + Math.floor(missileLv / 4))) / SYSTEM.missileCd
     : 0;
-  const flakDps = (U.flak.add * lv('flak') * dmgMult) / SYSTEM.flakCd;
+  const flakDps = (U.flak.add * lv('flak') * dmgMult * wFlak) / SYSTEM.flakCd;
   // Arc hits several targets; count two for single-target-equivalent purposes.
-  const arcDps = (U.arc.add * lv('arc') * dmgMult * 2) / SYSTEM.arcCd;
+  const arcDps = (U.arc.add * lv('arc') * dmgMult * wArc * 2) / SYSTEM.arcCd;
   const dps = mainDps + wingDps + laserDps + missileDps + flakDps + arcDps;
 
   return {
@@ -444,13 +457,14 @@ export function deriveStats(up, lab, prestigeCount) {
     armor:       Math.min(U.armor.cap, U.armor.add * lv('armor')),
     thorns:      U.thorns.add * lv('thorns'),
     // --- weapon systems -------------------------------------------------
-    laserDps:     U.laser.add * lv('laser') * dmgMult,
-    missileDmg:   lv('missiles') ? (150 + U.missiles.add * lv('missiles')) * dmgMult : 0,
+    laserDps:     U.laser.add * lv('laser') * dmgMult * wLaser,
+    missileDmg:   lv('missiles') ? (150 + U.missiles.add * lv('missiles')) * dmgMult * wMissile : 0,
     missileCount: Math.min(5, 1 + Math.floor(lv('missiles') / 4)),
-    flakDmg:      U.flak.add * lv('flak') * dmgMult,
-    flakRadius:   72 + lv('flak') * 2.4,
-    arcDmg:       U.arc.add * lv('arc') * dmgMult,
-    arcJumps:     Math.min(8, 2 + Math.floor(lv('arc') / 4)),
+    flakDmg:      U.flak.add * lv('flak') * dmgMult * wFlak,
+    flakRadius:   (72 + lv('flak') * 2.4) * Math.pow(wFlak, 0.35),
+    arcDmg:       U.arc.add * lv('arc') * dmgMult * wArc,
+    arcJumps:     Math.min(10, 2 + Math.floor(lv('arc') / 4) + Math.floor((lab.labArc || 0) / 3)),
+    wingRate:     SYSTEM.wingFraction * wWing,
 
     coinMult:    coinMult * (1 + U.coinBonus.add * lv('coinBonus')),
     // Pickups have to be flown over to be collected, so magnet radius is a

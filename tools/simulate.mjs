@@ -227,7 +227,11 @@ function simulateRun(lab, prestige, trace) {
 function spendCores(lab, cores) {
   // Rough but sane meta policy: prioritise the multipliers that compound,
   // keep Forward Deploy roughly in step with how deep we actually get.
-  const order = ['labDamage', 'labHull', 'labFireRate', 'labCoins', 'labCrit', 'labStartCash', 'labCoreYield', 'labStartWave', 'labSpeed', 'labOffline'];
+  const order = [
+    'labDamage', 'labHull', 'labFireRate', 'labCoins', 'labCrit',
+    'labLaser', 'labMissile', 'labFlak', 'labArc', 'labWing',
+    'labStartCash', 'labCoreYield', 'labStartWave', 'labSpeed', 'labOffline',
+  ];
   let spent = true;
   while (spent) {
     spent = false;

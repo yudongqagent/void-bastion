@@ -241,8 +241,8 @@ function frame(now) {
   if (fpsAccum >= 1) {
     const fps = frames / fpsAccum;
     frames = 0; fpsAccum = 0;
-    if (fps < 44 && renderer.bloomIntensity > 0.6) renderer.bloomIntensity = 0.6;
-    else if (fps > 56 && renderer.bloomIntensity < 1.15) renderer.bloomIntensity = 1.15;
+    if (fps < 44 && renderer.bloomIntensity > 0.35) renderer.bloomIntensity = 0.35;
+    else if (fps > 56 && renderer.bloomIntensity < 0.62) renderer.bloomIntensity = 0.62;
   }
 
   state.tickSave(now);

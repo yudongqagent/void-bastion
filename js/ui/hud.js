@@ -177,10 +177,13 @@ export class UI {
       // two-per-row card and the description is hidden by CSS; on desktop the
       // same nodes lay out as a wide row with the description showing.
       el.title = `${u.name} — ${u.desc}`;
+      // Weapon systems carry a colour pip matching the light they make on
+      // screen, so "which upgrade did that?" is answerable without reading.
+      const pip = u.tint ? `<i class="w-pip w-${u.tint}"></i>` : '';
       el.innerHTML = `
         <div class="up-main">
           <div class="up-head">
-            <span class="up-name">${u.name}</span>
+            <span class="up-name">${pip}${u.name}</span>
             <span class="up-lv">Lv 0</span>
           </div>
           <div class="up-desc">${u.desc}</div>

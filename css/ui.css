@@ -250,14 +250,14 @@ html, body {
   padding-bottom: var(--safe-b);
 }
 
-.tabs { display: flex; gap: 2px; padding: 8px 8px 0; flex: none; }
+.tabs { display: flex; gap: 4px; padding: 8px 10px 0; flex: none; }
 .tab {
   flex: 1;
   padding: 8px 4px;
   font: inherit;
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.1em;
   color: var(--text-dim);
   background: transparent;
   border: none;
@@ -329,6 +329,20 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Pip colours mirror js/game/game.js COLORS for each weapon system. */
+.w-pip {
+  display: inline-block;
+  width: 7px; height: 7px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+.w-laser   { background: #5ee0f5; box-shadow: 0 0 6px #5ee0f5; }
+.w-missile { background: #ffa33d; box-shadow: 0 0 6px #ffa33d; }
+.w-flak    { background: #ffcf4d; box-shadow: 0 0 6px #ffcf4d; }
+.w-arc     { background: #a98cff; box-shadow: 0 0 6px #a98cff; }
+.w-wing    { background: #4ff0ad; box-shadow: 0 0 6px #4ff0ad; }
+
 .up-lv {
   flex: none;
   min-width: 20px;

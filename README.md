@@ -58,7 +58,8 @@ the permanent upgrade panel painted over it keeps its own taps.
 ### Weapon systems
 
 Beyond the main cannon there are five auto-firing systems, each an in-run
-upgrade on its own **WEAPONS** tab, level 0 meaning "not owned yet":
+upgrade in the **OFFENSE** tab, level 0 meaning "not owned yet", and each with
+its own permanent research track in the Lab:
 
 | | |
 |---|---|
@@ -67,6 +68,15 @@ upgrade on its own **WEAPONS** tab, level 0 meaning "not owned yet":
 | **Flak Cannon** | airburst over the thickest part of the swarm |
 | **Arc Coil** | lightning chaining outward from your target |
 | **Escort Wingmen** | wingmen flying formation and firing real tracers |
+
+Each system owns a colour, used both for its light on screen and for a pip on
+its upgrade card — laser cyan, missiles orange, flak gold, arc violet, wingmen
+green. "Which upgrade made that?" should be answerable by looking, not reading.
+That matters because several systems were previously invisible in play: flak
+detonated instantly at a distant point (it now lobs a shell you can watch, with
+a ghost ring marking where it will burst), missiles launched too fast to see
+(now slower off the rail with a heavy exhaust trail), and wingman tracers were
+identical to the main gun's.
 
 Every one of them folds its output into `deriveStats().dps`. That is not
 cosmetic: the buying AI in both harnesses ranks upgrades by DPS-per-coin, so a
