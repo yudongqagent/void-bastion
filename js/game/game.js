@@ -116,6 +116,7 @@ const newEnemy = () => ({
   fireT: 0, phase: false, phaseT: 0, distScale: 1, stun: 0,
   behavior: 'dive', t: 0, homeX: 0, amp: 0, freq: 0, holdY: 0, face: 0,
   ground: false, hull: null, accent: null, smokeT: 0,
+  blast: 0, aura: 0, warded: 0, pack: 1,
   weapon: null, wcd: 0, elite: false, burst: 0, burstT: 0, spin2: 0, bossDef: null,
 });
 
@@ -428,8 +429,9 @@ export class Game {
       for (const t of table) { r -= t.weight; if (r <= 0) { pick = t; break; } }
       const a = pick.arch;
       const elite = Math.random() < eliteRate;
+      const copies = a.pack || 1;
       const E = elite ? ELITE : null;
-      this.spawnQueue.push({
+      const def = {
         type: pick.key,
         elite,
         hp: baseHP * a.hp * (sec.hpMult || 1) * (E ? E.hp : 1) * refit.hp * diff.hp,
@@ -443,7 +445,12 @@ export class Game {
         // An elite always brings a gun, even if its archetype rams for a living.
         weapon: elite ? eliteWeapon(wave, a.weapon) : a.weapon,
         splits: pick.key === 'splitter' ? 2 : 0,
-      });
+        blast: a.blast || 0,
+        aura: a.aura || 0,
+        standoff: a.standoff || 0,
+      };
+      // Chaff spawns as a cloud. One mite is noise; a flight of them is a wave.
+      for (let c = 0; c < copies; c++) this.spawnQueue.push(c === 0 ? def : { ...def });
     }
     if (isBossWave(wave)) {
       const b = bossStats(wave);
@@ -554,6 +561,9 @@ export class Game {
     e.hull = hp.hull;
     e.accent = hp.accent;
     e.elite = !!def.elite;
+    e.blast = def.blast || 0;
+    e.aura = def.aura || 0;
+    e.warded = 0;
     e.bossDef = def.bossDef || null;
     e.weapon = def.weapon || null;
     e.wcd = 0.6 + Math.random() * 1.4;
@@ -589,10 +599,12 @@ export class Game {
     } else if (def.boss) {
       e.behavior = 'boss';
       e.holdY = this.y0 + this.fieldH * 0.22;
-    } else if (def.weapon && ARTILLERY.has(def.type)) {
+    } else if (def.weapon && (ARTILLERY.has(def.type) || def.standoff)) {
       // Artillery holds station and shoots; it is not trying to reach you.
       e.behavior = 'hover';
-      e.holdY = this.y0 + this.fieldH * (0.16 + Math.random() * 0.42);
+      e.holdY = def.standoff
+        ? this.y0 + this.fieldH * (def.standoff + Math.random() * 0.08)
+        : this.y0 + this.fieldH * (0.16 + Math.random() * 0.42);
     } else if (def.type === 'darter' || def.type === 'wraith') {
       e.behavior = 'swarm';
     } else if (def.type === 'splitter' || def.type === 'shielder') {
@@ -924,6 +936,7 @@ export class Game {
   }
 
   damageEnemy(e, amount, crit, showNumber = true) {
+    if (e.warded) amount *= 0.42;
     if (e.shield > 0) {
       const absorbed = Math.min(e.shield, amount);
       e.shield -= absorbed;
@@ -945,8 +958,19 @@ export class Game {
     run.kills++;
     meta.totalKills++;
 
-    this.spawnExplosion(e.x, e.y, e.radius, e.color, e.boss);
-    this.synth.kill(e.boss);
+    this.spawnExplosion(e.x, e.y, e.radius, e.color, e.boss || e.blast > 0);
+    this.synth.kill(e.boss || e.blast > 0);
+
+    // A bomber is a trap as much as a target: shoot it early or eat the blast.
+    if (e.blast > 0) {
+      this.spawnRing(e.x, e.y, e.blast, [1.6, 0.5, 0.15], 0.42);
+      const d = Math.hypot(this.ship.x - e.x, this.ship.y - e.y);
+      if (d < e.blast + this.ship.radius) {
+        const falloff = 1 - d / (e.blast + this.ship.radius);
+        this.damageShip(e.dmg * TUNING.CONTACT_SCALE * 0.9 * falloff, null);
+      }
+      this.shake(7);
+    }
 
     if (!silent) this.dropLoot(e);
 
@@ -1177,6 +1201,7 @@ export class Game {
     this.spawnThrust(dt);
     this.fire(dt);
     this.updateBullets(dt);
+    this.updateWards();
     this.updateEnemies(dt);
     this.updateWingmen(dt);
     this.updateSystems(dt);
@@ -1380,6 +1405,32 @@ export class Game {
           }
           if (--b.pierce <= 0) { b.active = false; break; }
         }
+      }
+    }
+  }
+
+  /**
+   * Wardens project a damage-reduction field over nearby craft.
+   *
+   * A support enemy gives a wave a shape: without one you shoot whatever is
+   * closest, with one there is a right answer. Recomputed per frame from the
+   * live warden set so killing the warden drops the shelter immediately.
+   */
+  updateWards() {
+    const items = this.enemies.items;
+    let any = false;
+    for (const w of items) if (w.active && w.aura > 0) { any = true; break; }
+    if (!any) {
+      for (const e of items) if (e.warded) e.warded = 0;
+      return;
+    }
+    for (const e of items) {
+      if (!e.active) continue;
+      e.warded = 0;
+      if (e.aura > 0) continue;
+      for (const w of items) {
+        if (!w.active || w.aura <= 0 || w === e) continue;
+        if (Math.hypot(e.x - w.x, e.y - w.y) <= w.aura) { e.warded = 1; break; }
       }
     }
   }
@@ -2348,6 +2399,46 @@ export class Game {
         break;
       }
 
+      case 'mite':        // chaff — a bare dart, barely a craft
+        bar(0, -0.6, 0, 0.9, 0.4, 1.1);
+        dot(0, 0.35, 0.32, 2.2);
+        break;
+
+      case 'bomber':      // fat ordnance hull with a live warhead up front
+        gon(0, -0.05, 0.72, 4, 0.78, 0.95);
+        bar(-0.9, -0.3, 0.9, -0.3, 0.22, 0.85);
+        dot(0, 0.62, 0.34, 2.4);
+        R.ring(e.x, e.y, s * 0.95, s * 0.13, acc[0], acc[1], acc[2], alpha * 0.7);
+        break;
+
+      case 'juggernaut':  // slab of armour; layered plates, tiny cockpit
+        gon(0, 0, 0.9, 7, 0.2, 0.7);
+        gon(0, 0, 0.62, 7, 0.5, 0.95);
+        bar(-1.15, -0.25, 1.15, -0.25, 0.3, 0.8);
+        bar(-1.15, 0.35, 1.15, 0.35, 0.3, 0.8);
+        bar(0, -0.9, 0, 0.95, 0.4, 1.05);
+        dot(0, 0.25, 0.2, 2.0);
+        break;
+
+      case 'sniper':      // long rail down the spine, minimal airframe
+        bar(0, -0.7, 0, 1.5, 0.16, 1.2);
+        bar(-0.55, -0.35, 0.55, -0.35, 0.2, 0.9);
+        bar(-0.3, -0.6, 0.3, -0.6, 0.16, 0.8);
+        dot(0, 1.42, 0.16, 2.6);
+        dot(0, -0.3, 0.2, 1.8);
+        break;
+
+      case 'warden':      // support hull under a projector ring
+        gon(0, 0, 0.62, 6, 0.3, 0.9);
+        R.ring(e.x, e.y, s * 1.1, s * 0.12, acc[0] * 0.8, acc[1] * 0.8, acc[2] * 0.8, alpha * 0.8);
+        for (let i = 0; i < 3; i++) {
+          const a2 = e.t * 0.9 + (i / 3) * TAU;
+          R.disc(e.x + Math.cos(a2) * s * 1.1, e.y + Math.sin(a2) * s * 1.1,
+            s * 0.13, acc[0], acc[1], acc[2], alpha);
+        }
+        dot(0, 0, 0.3, 2.0);
+        break;
+
       case 'turret':      // AA emplacement — ring base, twin barrels
         R.ring(e.x, e.y, s * 1.05, s * 0.2, hr * 1.2, hg * 1.2, hb * 1.2, alpha);
         gon(0, 0, 0.66, 8, 0.2, 1.0);
@@ -2404,6 +2495,17 @@ export class Game {
 
   renderEnemies(time) {
     const R = this.renderer;
+
+    // The warden's field, drawn first so craft sit inside it. Its edge is the
+    // information: everything within is taking well under half damage.
+    for (const w of this.enemies.items) {
+      if (!w.active || !w.aura) continue;
+      const c = w.accent || [0.35, 1.5, 1.25];
+      const pulse = 1 + Math.sin(time * 2.2) * 0.02;
+      R.ring(w.x, w.y, w.aura * pulse, 1.6, c[0], c[1], c[2], 0.32);
+      R.glow(w.x, w.y, w.aura * 0.9, c[0], c[1], c[2], 0.05, 2.6);
+    }
+
     for (const e of this.enemies.items) {
       if (!e.active) continue;
       let [r, g, b] = e.boss && e.bossDef ? e.bossDef.accent : e.color;
@@ -2437,6 +2539,11 @@ export class Game {
         }
       }
 
+      if (e.warded) {
+        // A sheltered craft wears the warden's colour, so "why is this not
+        // dying" has a visible answer.
+        R.ring(e.x, e.y, e.radius * 1.28, 1.2, 0.35, 1.5, 1.25, 0.55 * alpha);
+      }
       if (e.elite) {
         // Gold chevron ring: at a glance, "this one shoots and it hurts".
         const p = 1 + Math.sin(time * 3 + e.spin2) * 0.05;

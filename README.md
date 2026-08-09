@@ -98,6 +98,36 @@ Base range went 190 → 340, wingmen now fly slightly ahead and fire real
 tracers, and the arc seeds on the tracked target instead of chaining outward
 from the hull.
 
+### Roster spread
+
+Hull multipliers now run from 0.14 to 14 and damage from 0.3 to 5.5 — a
+hundredfold spread. A swarm where everything has roughly one unit of health and
+deals roughly one unit of damage is uniform no matter how many shapes it wears.
+
+| | |
+|---|---|
+| **Mite** | chaff, arrives four at a time, dies to a sneeze |
+| **Bomber** | fragile but detonates on death — shoot it early or eat the blast |
+| **Juggernaut** | 14× hull, crawls, worth a fortune |
+| **Rail Sniper** | holds at the far edge and lands single heavy shots |
+| **Warden** | shelters nearby craft under a damage-reduction field |
+
+The Warden is the interesting one: a support enemy gives a wave a *shape*.
+Without one you shoot whatever is closest; with one there is a right answer. Its
+field is drawn at true radius and sheltered craft wear its colour, so "why is
+this not dying" is answerable by looking.
+
+### Two upgrades removed
+
+**Sensor Array** was dead weight — bullets cross the lane regardless, so paying
+for reach only changed which enemy the guns happened to track. Range is now a
+constant.
+
+**Split Barrel** capped at three. Nine barrels filled the lane edge to edge,
+which removed any reason to aim or position and turned the screen into a wall of
+tracer. Base damage per shot went 5.5 → 13 to carry the weight the extra barrels
+were carrying.
+
 ### Craft silhouettes
 
 Enemies are assembled from the same five SDF primitives in a local frame where

@@ -164,6 +164,17 @@ export const ARCHETYPES = {
   lancer:   { name: 'Lancer',      from: 78,  weight: 22,  decay: 460, hp: 2.00, speed: 0.55, dmg: 1.90, coin: 3.40, radius: 14, sides: 4, weapon: 'beam' },
   dread:    { name: 'Dreadnought', from: 110, weight: 20,  decay: 999, hp: 5.50, speed: 0.45, dmg: 2.60, coin: 5.20, radius: 22, sides: 6, shield: 2.0, weapon: 'spread' },
 
+  // --- extremes ------------------------------------------------------------
+  // Deliberately spread far wider in hull and damage than the core roster. A
+  // swarm where everything has roughly one unit of health and deals roughly one
+  // unit of damage is uniform no matter how many shapes it wears; these are the
+  // ones that make a wave feel like it has a composition.
+  mite:     { name: 'Mite',        from: 3,   weight: 44,  decay: 240, hp: 0.14, speed: 2.10, dmg: 0.30, coin: 0.30, radius: 7,  sides: 3, pack: 4 },
+  bomber:   { name: 'Bomber',      from: 18,  weight: 26,  decay: 340, hp: 0.55, speed: 1.15, dmg: 5.50, coin: 2.20, radius: 13, sides: 4, blast: 78 },
+  juggernaut:{name: 'Juggernaut',  from: 40,  weight: 18,  decay: 999, hp: 14.0, speed: 0.34, dmg: 1.30, coin: 7.50, radius: 26, sides: 7 },
+  sniper:   { name: 'Rail Sniper', from: 48,  weight: 20,  decay: 520, hp: 0.85, speed: 0.55, dmg: 4.20, coin: 2.90, radius: 11, sides: 3, weapon: 'rail', standoff: 0.14 },
+  warden:   { name: 'Warden',      from: 64,  weight: 18,  decay: 999, hp: 3.20, speed: 0.62, dmg: 0.80, coin: 4.60, radius: 16, sides: 6, aura: 150 },
+
   // --- ground emplacements ------------------------------------------------
   turret:   { name: 'AA Turret',   from: 12,  weight: 24,  decay: 300, hp: 1.60, speed: 0, dmg: 1.10, coin: 1.90, radius: 13, sides: 8, weapon: 'aimed',  ground: true },
   tank:     { name: 'Gun Tank',    from: 24,  weight: 22,  decay: 340, hp: 2.60, speed: 0, dmg: 1.40, coin: 2.70, radius: 14, sides: 4, weapon: 'aimed',  ground: true },
@@ -195,6 +206,11 @@ export const HULLS = {
   tank:     { hull: [0.32, 0.35, 0.27], accent: [1.40, 0.80, 0.30] },
   warship:  { hull: [0.30, 0.33, 0.36], accent: [1.45, 0.55, 0.30] },
   sam:      { hull: [0.34, 0.33, 0.30], accent: [1.55, 0.35, 0.35] },
+  mite:     { hull: [0.38, 0.36, 0.30], accent: [1.45, 1.20, 0.30] },
+  bomber:   { hull: [0.40, 0.30, 0.26], accent: [1.60, 0.42, 0.14] },
+  juggernaut:{hull:[0.30, 0.32, 0.34], accent: [1.30, 0.60, 1.55] },
+  sniper:   { hull: [0.26, 0.30, 0.34], accent: [1.55, 0.25, 0.40] },
+  warden:   { hull: [0.28, 0.34, 0.36], accent: [0.35, 1.50, 1.25] },
   boss:     { hull: [0.34, 0.26, 0.28], accent: [1.60, 0.30, 0.35] },
 };
 
@@ -258,6 +274,7 @@ export const WEAPONS = {
   spread: { cd: 2.4, dmg: 1.1, speed: 240, count: 5,  spread: 0.44 },
   homing: { cd: 3.0, dmg: 1.9, speed: 150, count: 2,  spread: 0.30, homing: 1.8, life: 7 },
   radial: { cd: 2.2, dmg: 0.9, speed: 200, count: 9,  spread: 0,    spiral: true },
+  rail:   { cd: 3.6, dmg: 2.4, speed: 540, count: 1,  spread: 0 },
   beam:   { cd: 4.2, dmg: 2.6, telegraph: 0.85, duration: 0.55, width: 26 },
 };
 
@@ -271,13 +288,14 @@ export const WEAPONS = {
 // idle-game decay: every level is worth buying, each is worth a little less.
 
 export const UPGRADES = {
-  damage:      { tab: 'offense', label: 'dmg', name: 'Plasma Yield',    desc: 'Damage per shot',            curve: 'lin', base: 26,    step: 15,   add: 5.5,   fmt: 'flat' },
+  damage:      { tab: 'offense', label: 'dmg', name: 'Plasma Yield',    desc: 'Damage per shot',            curve: 'lin', base: 26,    step: 15,   add: 13,    fmt: 'flat' },
   fireRate:    { tab: 'offense', label: 'rate', name: 'Cycle Rate',      desc: 'Shots per second',           base: 40,   growth: 1.145, add: 0.11,  fmt: 'rate' },
   critChance:  { tab: 'offense', label: 'crit', name: 'Targeting AI',    desc: 'Critical hit chance',        base: 90,   growth: 1.165, add: 0.014, fmt: 'pct', cap: 0.75, maxLevel: 52 },
   critMult:    { tab: 'offense', label: 'crit dmg', name: 'Overcharge',      desc: 'Critical damage multiplier', base: 130,  growth: 1.155, add: 0.16,  fmt: 'mult' },
-  multishot:   { tab: 'offense', label: 'shots', name: 'Split Barrel',    desc: 'Extra projectiles per shot', base: 420,  growth: 1.30,  add: 1,     fmt: 'int', cap: 8, maxLevel: 8 },
+  // Capped at three barrels. Nine filled the lane edge to edge, which removed
+  // any reason to aim or position and turned the screen into a wall of tracer.
+  multishot:   { tab: 'offense', label: 'shots', name: 'Split Barrel',    desc: 'Extra projectiles per shot', base: 620,  growth: 1.42,  add: 1,     fmt: 'int', cap: 2, maxLevel: 2 },
   pierce:      { tab: 'offense', label: 'pierce', name: 'Rail Coil',       desc: 'Enemies pierced per shot',   base: 380,  growth: 1.34,  add: 1,     fmt: 'int', cap: 9, maxLevel: 9 },
-  range:       { tab: 'offense', label: 'range', name: 'Sensor Array',    desc: 'How far up the lane you track', base: 55, growth: 1.135, add: 11,    fmt: 'flat' },
 
   // --- weapon systems: level 0 means "not owned yet" ---------------------
   laser:      { tab: 'offense' , tint: 'laser', label: 'laser',    name: 'Pulse Laser',    desc: 'Continuous beam on your target',   curve: 'lin', base: 1300, step: 160, add: 360, fmt: 'flat' },
@@ -672,7 +690,9 @@ export function deriveStats(up, lab, prestigeCount) {
 
   return {
     damage, fireRate, shots, pierce, critChance, critMult, dps,
-    range:       340 + U.range.add * lv('range'),
+    // Fixed. As an upgrade this was dead weight: bullets cross the lane anyway,
+    // so paying for reach only changed which enemy the guns happened to track.
+    range:       460,
     maxHull:     (300 + U.maxHull.add * lv('maxHull')) * hullMult,
     regen:       (1.5 + U.regen.add * lv('regen')) * hullMult,
     maxShield:   (0 + U.shieldMax.add * lv('shieldMax')) * hullMult,
