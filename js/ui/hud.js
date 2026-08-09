@@ -10,6 +10,7 @@ import {
   UPGRADES, LAB, ABILITIES, upgradeCost, upgradeBulkCost, affordableLevels,
   upgradeMaxLevel, labCost, labMult, coresForRun, startingWave, deriveStats,
   speedOptions, fmt, isBossWave, masteryLabel, masteryTier, MASTERY,
+  DIFFICULTIES, difficulty, unlockedDifficulty, UNLOCK_LEVEL,
 } from '../game/balance.js';
 import { levelOf, phaseOf, PHASES_PER_LEVEL, STEPS_PER_LEVEL } from '../game/levels.js';
 
@@ -31,7 +32,7 @@ function statText(key, stats) {
     // Weapon systems. Without these the lookup returned undefined and fmt()
     // rendered every one of them as "∞".
     laser: stats.laserDps, missiles: stats.missileDmg,
-    flak: stats.flakDmg, arc: stats.arcDmg,
+    flak: stats.flakDmg, arc: stats.arcDmg, interest: stats.interest,
   }[key];
   if (v == null || !isFinite(v)) return '—';
   switch (u.fmt) {
@@ -71,7 +72,7 @@ export class UI {
     for (const id of ['waveNum', 'coinNum', 'coreNum', 'bossTag', 'upgradeList', 'drawer',
       'abilities', 'modalRoot', 'toasts',
       'speedBtn', 'soundBtn', 'labList', 'abilityShop', 'labCores', 'menuStats',
-      'zoneName', 'phaseDots']) {
+      'zoneName', 'phaseDots', 'home', 'diffList', 'homeStats']) {
       this[id] = this.$(id);
     }
   }
@@ -116,6 +117,16 @@ export class UI {
     click(this.$('menuLabBtn'), () => this.showModal('modalLab'));
     click(this.$('menuAscendBtn'), () => this.showAscend());
     click(this.$('menuHelpBtn'), () => this.showModal('modalHelp'));
+    click(this.$('menuHomeBtn'), () => { this.forceHideModal(); this.showHome(); });
+    click(this.$('homeHelpBtn'), () => this.showModal('modalHelp'));
+    click(this.$('launchBtn'), () => this.launch());
+    this.diffList.addEventListener('click', (e) => {
+      const row = e.target.closest('.diff');
+      if (!row || row.classList.contains('locked')) return;
+      this.synth.click();
+      this.pendingDiff = Number(row.dataset.i);
+      this.buildHome();
+    });
     click(this.$('overLabBtn'), () => this.showModal('modalLab', { returnTo: 'modalOver' }));
     click(this.$('wipeBtn'), () => this.confirmWipe());
 
@@ -325,10 +336,7 @@ export class UI {
       // Every track states its effect the same way the upgrade cards do:
       // what it is now, and what one more level makes it.
       let now, next;
-      if (key === 'labStartWave') {
-        now = 'wave ' + startingWave(lvl);
-        next = 'wave ' + startingWave(lvl + 1);
-      } else if (key === 'labSpeed') {
+      if (key === 'labSpeed') {
         now = speedOptions(lvl).slice(-1)[0] + '×';
         next = speedOptions(lvl + 1).slice(-1)[0] + '×';
       } else if (key === 'labStartCash') {
@@ -481,6 +489,69 @@ export class UI {
   }
 
 
+  // --- home screen ------------------------------------------------------
+
+  showHome() {
+    this.pendingDiff = this.state.meta.difficulty || 0;
+    this.buildHome();
+    this.home.hidden = false;
+    this.game.paused = true;
+  }
+
+  buildHome() {
+    const { meta } = this.state;
+    const unlocked = unlockedDifficulty(meta.bestByDiff);
+    const frag = document.createDocumentFragment();
+
+    DIFFICULTIES.forEach((d, i) => {
+      const locked = i > unlocked;
+      const best = (meta.bestByDiff && meta.bestByDiff[i]) || 0;
+      const el = document.createElement('div');
+      el.className = 'diff' + (i === this.pendingDiff ? ' sel' : '') + (locked ? ' locked' : '');
+      el.dataset.i = i;
+      const prev = DIFFICULTIES[i - 1];
+      el.innerHTML = `
+        <div>
+          <div class="diff-name">${d.name}</div>
+          <div class="diff-blurb">${d.blurb}</div>
+          ${locked
+            ? `<div class="diff-req">Reach level ${UNLOCK_LEVEL} on ${prev.name} to unlock</div>`
+            : `<div class="diff-meta">enemy hull ×${d.hp.toFixed(1)} · damage ×${d.dmg.toFixed(2)}${
+                best ? ` · best level ${best}` : ''}</div>`}
+        </div>
+        ${locked
+          ? '<div class="diff-lock">&#128274;</div>'
+          : `<div class="diff-core">×${d.cores.toFixed(1)}<span>CORES</span></div>`}`;
+      frag.appendChild(el);
+    });
+    this.diffList.replaceChildren(frag);
+
+    this.homeStats.innerHTML =
+      `<div>CORES <b>${fmt(meta.cores)}</b></div>` +
+      `<div>ASCENSIONS <b>${meta.prestiges}</b></div>` +
+      `<div>BEST <b>${(meta.bestByDiff && meta.bestByDiff[this.pendingDiff]) || 0}</b></div>`;
+  }
+
+  /**
+   * Commit the chosen difficulty and start flying.
+   *
+   * Changing tier restarts the run — enemy scaling is baked in when a wave is
+   * built, so continuing mid-run on a new tier would leave the current level
+   * mismatched against the one that follows it.
+   */
+  launch() {
+    const { meta } = this.state;
+    const next = Math.min(this.pendingDiff, unlockedDifficulty(meta.bestByDiff));
+    const changed = next !== (meta.difficulty || 0);
+    meta.difficulty = next;
+    meta.seenHome = true;
+    this.home.hidden = true;
+    this.state.save();
+    if (changed && this.onDifficultyChange) this.onDifficultyChange();
+    this.game.paused = false;
+    this.toast(`${difficulty(next).name} — CORES ×${difficulty(next).cores.toFixed(1)}`, 'violet', true);
+  }
+
   /** Four phase pips plus a wider boss pip, filled as the level progresses. */
   renderPhaseDots(phase) {
     if (!this.phaseDots) return;
@@ -605,7 +676,7 @@ export class UI {
     this.$('ascCores').textContent = fmt(cores);
     this.$('ascHint').textContent = cores === 0
       ? 'Reach at least wave 5 before ascending is worth anything.'
-      : `You will restart on wave ${startingWave(meta.lab.labStartWave)} with every Lab bonus intact.`;
+      : 'You will restart at level 1 with every Lab bonus intact.';
     this.showModal('modalAscend');
   }
 

@@ -23,7 +23,7 @@ import {
   enemyHP, enemyCount, enemySpeed, enemyDamage, coinValue, waveClearBonus,
   spawnWindow, isBossWave, bossStats, spawnTable, ABILITIES, deriveStats,
   BOSS_INTERVAL, TUNING, WEAPONS, ELITE, eliteChance, eliteWeapon, SYSTEM,
-  GROUND_TYPES, hullFor,
+  GROUND_TYPES, hullFor, difficulty, interestPrincipal,
 } from './balance.js';
 import { sectorForWave, sectorNumber, isSectorStart } from './sectors.js';
 import {
@@ -420,6 +420,7 @@ export class Game {
     const baseCoin = coinValue(wave) / SWARM_DENSITY;
 
     const refit = levelUpgrade(levelOf(wave));
+    const diff = difficulty(this.state.meta.difficulty);
     const eliteRate = eliteChance(wave);
     this.spawnQueue.length = 0;
     for (let i = 0; i < count; i++) {
@@ -431,9 +432,9 @@ export class Game {
       this.spawnQueue.push({
         type: pick.key,
         elite,
-        hp: baseHP * a.hp * (sec.hpMult || 1) * (E ? E.hp : 1) * refit.hp,
+        hp: baseHP * a.hp * (sec.hpMult || 1) * (E ? E.hp : 1) * refit.hp * diff.hp,
         speed: baseSpd * a.speed * (sec.speedMult || 1) * (E ? E.speed : 1),
-        dmg: baseDmg * a.dmg * (E ? E.dmg : 1) * refit.dmg,
+        dmg: baseDmg * a.dmg * (E ? E.dmg : 1) * refit.dmg * diff.dmg,
         coin: baseCoin * a.coin * (sec.coinMult || 1) * (E ? E.coin : 1),
         radius: a.radius * (E ? E.radius : 1), sides: a.sides,
         shield: a.shield ? baseHP * a.shield * 0.5 * (E ? E.hp : 1) : 0,
@@ -448,9 +449,9 @@ export class Game {
       const b = bossStats(wave);
       const def = bossForLevel(levelOf(wave));
       this.spawnQueue.push({
-        type: 'boss', hp: b.hp * (sec.hpMult || 1) * def.hp * refit.hp,
+        type: 'boss', hp: b.hp * (sec.hpMult || 1) * def.hp * refit.hp * diff.hp,
         speed: b.speed * (sec.speedMult || 1),
-        dmg: b.damage * refit.dmg, coin: b.coins * (sec.coinMult || 1),
+        dmg: b.damage * refit.dmg * diff.dmg, coin: b.coins * (sec.coinMult || 1),
         radius: def.radius, sides: 8, shield: 0, boss: true, splits: 0,
         bossDef: def,
       });
@@ -475,6 +476,19 @@ export class Game {
     const bonus = waveClearBonus(run.wave) * this.stats.coinMult * (this.sector.coinMult || 1);
     run.coins += bonus;
     this.addFloater(this.ship.x, this.ship.y - 60, '+' + Math.floor(bonus), COLORS.coin, 1.3);
+
+    // Interest on whatever is still banked. Paid per phase so the choice
+    // between spending and saving comes up constantly rather than once a level.
+    const rate = this.stats.interest;
+    if (rate > 0) {
+      const gained = interestPrincipal(run.wave, run.coins) * rate;
+      if (gained >= 1) {
+        run.coins += gained;
+        this.addFloater(this.ship.x, this.ship.y - 84,
+          '+' + fmtShort(gained) + ' INTEREST', [0.45, 1.45, 0.75], 1.15);
+        this.emit('interest', { gained });
+      }
+    }
     this.waveActive = false;
     this.interWave = 1.0;
 
@@ -2684,32 +2698,61 @@ Game.prototype.renderShipStatus = function (ctx, sx, sy) {
   const shield = s.maxShield > 0 ? Math.max(0, Math.min(1, run.shield / s.maxShield)) : 1;
   if (hull > 0.995 && shield > 0.995) return;
 
+  // Below the ship, and on a dark plate. Above the hull it sat in the busiest
+  // part of the screen — incoming fire, explosions and the enemy formation all
+  // occupy that space — and thin glowing text simply disappeared into it.
   const x = this.ship.x + sx;
-  // Above the ship: below it collides with the ability row on a phone.
-  let y = this.ship.y - this.ship.radius - 22 + sy;
+  const rows = [];
+  if (hull <= 0.995) {
+    rows.push({
+      text: Math.round(hull * 100) + '%',
+      col: hull > 0.6 ? '#7bf0ab' : hull > 0.3 ? '#ffc85a' : '#ff5a6e',
+      size: hull < 0.3 ? 14 : 12.5,
+    });
+  }
+  if (shield <= 0.995 && s.maxShield > 0) {
+    rows.push({ text: '\u25c7 ' + Math.round(shield * 100) + '%', col: '#7cc4ff', size: 10.5 });
+  }
+
+  const lineH = 14;
+  const height = rows.length * lineH + 6;
+  let top = this.ship.y + this.ship.radius + 9 + sy;
+  // Keep it inside the flight lane rather than under the ability row.
+  top = Math.min(top, this.y1 - height - 4);
+
   ctx.save();
   ctx.textAlign = 'center';
-  ctx.textBaseline = 'bottom';
+  ctx.textBaseline = 'top';
 
-  if (shield <= 0.995 && s.maxShield > 0) {
-    const pct = Math.round(shield * 100);
-    ctx.font = '700 10px ui-monospace, "SF Mono", Menlo, monospace';
-    ctx.fillStyle = 'rgba(120,190,255,0.95)';
-    ctx.shadowColor = 'rgba(60,150,255,0.9)';
-    ctx.shadowBlur = 6;
-    ctx.fillText('\u25c7 ' + pct + '%', x, y);
-    y -= 12;
+  let width = 0;
+  for (const r of rows) {
+    ctx.font = `700 ${r.size}px ui-monospace, "SF Mono", Menlo, monospace`;
+    width = Math.max(width, ctx.measureText(r.text).width);
   }
-  if (hull <= 0.995) {
-    const pct = Math.round(hull * 100);
-    // Green through amber to red, so severity is readable without the number.
-    const col = hull > 0.6 ? 'rgba(120,240,170,0.95)'
-      : hull > 0.3 ? 'rgba(255,200,90,0.97)' : 'rgba(255,90,110,1)';
-    ctx.font = `700 ${hull < 0.3 ? 13 : 11}px ui-monospace, "SF Mono", Menlo, monospace`;
-    ctx.fillStyle = col;
-    ctx.shadowColor = col;
-    ctx.shadowBlur = 8;
-    ctx.fillText(pct + '%', x, y);
+  width += 16;
+
+  // Plate: cheap contrast that works over water, land or an explosion.
+  ctx.globalAlpha = 0.62;
+  ctx.fillStyle = '#04070e';
+  const rx = x - width / 2, ry = top - 3, rr = 5;
+  ctx.beginPath();
+  ctx.moveTo(rx + rr, ry);
+  ctx.arcTo(rx + width, ry, rx + width, ry + height, rr);
+  ctx.arcTo(rx + width, ry + height, rx, ry + height, rr);
+  ctx.arcTo(rx, ry + height, rx, ry, rr);
+  ctx.arcTo(rx, ry, rx + width, ry, rr);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  let y = top;
+  for (const r of rows) {
+    ctx.font = `700 ${r.size}px ui-monospace, "SF Mono", Menlo, monospace`;
+    ctx.fillStyle = r.col;
+    ctx.shadowColor = r.col;
+    ctx.shadowBlur = 6;
+    ctx.fillText(r.text, x, y);
+    ctx.shadowBlur = 0;
+    y += lineH;
   }
   ctx.restore();
 };

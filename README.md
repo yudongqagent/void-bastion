@@ -23,7 +23,7 @@ guns trying to ram you; kills scatter coins you have to fly over to collect.
 
 | | |
 |---|---|
-| ⬤ **Coins** | Drop from kills and wave clears. Spent during a run in **UPGRADES**. Lost when the run ends. |
+| ⬤ **Coins** | Drop from kills and phase clears. Spent during a run in **UPGRADES**. Lost when the run ends. |
 | ◆ **Cores** | Earned by ascending. Spent in the **LAB** on permanent research that survives forever. |
 
 Runs are *designed* to end. Enemy health grows exponentially with the wave
@@ -325,6 +325,41 @@ back when there is headroom.
 
 Object pools keep steady-state allocation at essentially zero, and the DOM
 refreshes at ~12Hz rather than per frame.
+
+### Difficulty tiers
+
+Five tiers on the home screen, each unlocked by reaching level 100 on the one
+below. Enemies get tougher and Cores pay more, and the payout is set **above**
+break-even rather than at it, so moving up is the correct play rather than a
+vanity toggle.
+
+The sums behind the numbers: enemy hull at level L scales as 1.193^L, so a hull
+multiplier M costs ln(M)/ln(1.193) levels of depth, and Cores scale as 1.083^L,
+so those lost levels cost 1.083^(that many) in payout. Veteran's ×2.2 hull costs
+about 4.5 levels — worth ~1.43× Cores — so its ×2.6 makes the switch worth
+roughly 1.8× per run. Every tier above clears its bar by a wider margin.
+
+### Interest, and why banking is a real choice
+
+**Yield Bonds** pays a percentage of your held coins at every phase clear, with
+**Compound Theory** raising the rate in the Lab. Spending immediately buys power
+now; sitting on a balance compounds it. That is a decision the game did not
+previously contain.
+
+Two guardrails keep it a choice rather than an exploit. The cost curve is
+exponential and the rate is hard-capped, because the payout already compounds
+and a linear curve on top would make banking the only move worth making. And
+interest is paid on a **capped principal**, tied to the current wave-clear
+bonus — without a ceiling the correct play at any depth is to stop buying
+entirely and let a pile grow.
+
+### Forward Deploy, removed
+
+It skipped levels, and it never worked. Skipping the early levels also skips
+their income and their upgrade ramp, so it was either a trap — a test career had
+runs ending three seconds after deploying — or it needed a pile of compensating
+catch-up coins to be survivable, at which point it was just a slower way to be
+handed resources. Difficulty tiers do the job it was reaching for, properly.
 
 ### Why you don't die out of nowhere
 

@@ -6,7 +6,7 @@
 
 import {
   LAB, ABILITIES, startingWave, startingCoins, labMult, deriveStats, coresForRun,
-  catchUpCoins,
+  DIFFICULTIES, unlockedDifficulty,
 } from './balance.js';
 
 const KEY = 'void-bastion:save:v1';
@@ -19,6 +19,10 @@ export function freshMeta() {
     lab: {},
     abilities: {},        // key -> true once unlocked
     bestWave: 0,
+    // Best LEVEL reached on each difficulty, which is what gates the next tier.
+    bestByDiff: DIFFICULTIES.map(() => 0),
+    difficulty: 0,
+    seenHome: false,
     totalKills: 0,
     totalRuns: 0,
     lastSeen: Date.now(),
@@ -28,13 +32,13 @@ export function freshMeta() {
 }
 
 export function freshRun(meta) {
-  const wave = startingWave(meta.lab.labStartWave);
+  const wave = startingWave();
   const stats = deriveStats({}, meta.lab, meta.prestiges);
   return {
     wave,
     startWave: wave,
     upgrades: {},
-    coins: startingCoins(meta.lab.labStartCash) + catchUpCoins(wave),
+    coins: startingCoins(meta.lab.labStartCash),
     hull: stats.maxHull,
     shield: stats.maxShield,
     kills: 0,
@@ -70,6 +74,9 @@ export class GameState {
       const data = JSON.parse(raw);
       if (!data || data.v !== 1) return false;
       this.meta = { ...freshMeta(), ...data.meta };
+      if (!Array.isArray(this.meta.bestByDiff)) this.meta.bestByDiff = DIFFICULTIES.map(() => 0);
+      // Never leave a save pointing at a tier it can no longer play.
+      this.meta.difficulty = Math.min(this.meta.difficulty || 0, unlockedDifficulty(this.meta.bestByDiff));
       this.meta.settings = { ...freshMeta().settings, ...(data.meta.settings || {}) };
       this.meta.lab = data.meta.lab || {};
       this.meta.abilities = data.meta.abilities || {};
@@ -97,11 +104,14 @@ export class GameState {
     const { run, meta } = this;
     if (run.banked) return 0;
     run.banked = true;
-    const cores = coresForRun(run.wave, meta.lab.labCoreYield || 0);
+    const cores = coresForRun(run.wave, meta.lab.labCoreYield || 0, meta.difficulty || 0);
     meta.cores += cores;
     meta.prestiges++;
     meta.totalRuns++;
     if (run.wave > meta.bestWave) meta.bestWave = run.wave;
+    const d = meta.difficulty || 0;
+    const level = Math.floor((run.wave - 1) / 5) + 1;
+    if (level > (meta.bestByDiff[d] || 0)) meta.bestByDiff[d] = level;
     run.bankedCores = cores;
     this.save();
     return cores;

@@ -203,6 +203,11 @@ if (hadSave) {
   state.meta.seenIntro = true;
   setTimeout(() => ui.showModal('modalHelp'), 350);
 }
+
+// Changing tier restarts the run: enemy scaling is applied when a wave is
+// built, so a half-flown level would be mismatched against the next one.
+ui.onDifficultyChange = () => startNewRun(false);
+ui.showHome();
 ui.setZone(game.sector);
 ui.updateSpeedButton();
 ui.soundBtn.classList.toggle('off', state.meta.settings.sound === false);

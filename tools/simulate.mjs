@@ -190,7 +190,7 @@ function simulateWave(wave, up, lab, prestige, state) {
 
 function simulateRun(lab, prestige, trace) {
   const up = {};
-  const startWave = startingWave(lab.labStartWave);
+  const startWave = startingWave();
   let stats = deriveStats(up, lab, prestige);
   const state = {
     coins: startingCoins(lab.labStartCash),
@@ -230,7 +230,7 @@ function spendCores(lab, cores) {
   const order = [
     'labDamage', 'labHull', 'labFireRate', 'labCoins', 'labCrit',
     'labLaser', 'labMissile', 'labFlak', 'labArc', 'labWing',
-    'labStartCash', 'labCoreYield', 'labStartWave', 'labSpeed', 'labOffline',
+    'labStartCash', 'labCoreYield', 'labInterest', 'labSpeed', 'labOffline',
   ];
   let spent = true;
   while (spent) {

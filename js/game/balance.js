@@ -24,6 +24,43 @@
 // is tuned against this one, so it is named rather than inlined.
 export const HP_BASE = 1.036;
 
+// ---------------------------------------------------------------------------
+// Difficulty
+// ---------------------------------------------------------------------------
+// Each tier unlocks by reaching UNLOCK_LEVEL on the one below it. Enemies get
+// tougher and Cores pay more, and the payout is deliberately set ABOVE the
+// break-even point rather than at it.
+//
+// The sums: enemy hull at level L scales as 1.193^L, so a hull multiplier M
+// costs you ln(M)/ln(1.193) levels of depth. Cores scale as 1.083^L, so those
+// lost levels cost 1.083^(that many) in payout. Veteran's 2.2x hull costs about
+// 4.5 levels, worth ~1.43x cores — so 2.6x makes the switch worth roughly 1.8x
+// per run. Every tier above clears its own bar by a wider margin, which is what
+// makes moving up the correct play rather than a vanity setting.
+export const UNLOCK_LEVEL = 100;
+
+export const DIFFICULTIES = [
+  { id: 'normal',    name: 'NORMAL',    hp: 1.0,  dmg: 1.00, cores: 1.0,  blurb: 'The baseline campaign.' },
+  { id: 'veteran',   name: 'VETERAN',   hp: 2.2,  dmg: 1.30, cores: 2.6,  blurb: 'Tougher hulls, better salvage.' },
+  { id: 'elite',     name: 'ELITE',     hp: 5.0,  dmg: 1.70, cores: 7.0,  blurb: 'Armoured swarms. Cores flow.' },
+  { id: 'nightmare', name: 'NIGHTMARE', hp: 12.0, dmg: 2.20, cores: 20.0, blurb: 'Everything hits back harder.' },
+  { id: 'void',      name: 'VOID',      hp: 30.0, dmg: 3.00, cores: 60.0, blurb: 'For bastions with nothing left to prove.' },
+];
+
+export function difficulty(index) {
+  return DIFFICULTIES[Math.max(0, Math.min(DIFFICULTIES.length - 1, index || 0))];
+}
+
+/** Highest tier the player has earned, from their best level on each tier. */
+export function unlockedDifficulty(bestByDiff = []) {
+  let unlocked = 0;
+  for (let i = 0; i < DIFFICULTIES.length - 1; i++) {
+    if ((bestByDiff[i] || 0) >= UNLOCK_LEVEL) unlocked = i + 1;
+    else break;
+  }
+  return unlocked;
+}
+
 /** Enemy hull for a normal enemy on the given wave. */
 export function enemyHP(wave) {
   // w^1.75 dominates until ~wave 80, then HP_BASE^w takes over and never stops.
@@ -73,6 +110,18 @@ export function coinValue(wave) {
 /** Flat bonus for surviving a wave. */
 export function waveClearBonus(wave) {
   return 14 * Math.pow(wave, 1.12) * Math.pow(1.03, wave);
+}
+
+/**
+ * Balance interest is paid on, capped relative to the current stage.
+ *
+ * Without a ceiling the correct play at any depth is to stop buying entirely
+ * and let a growing pile compound, which is not a decision so much as an
+ * exploit. Tying the cap to the wave-clear bonus keeps banking worthwhile at
+ * every stage without ever making it the only thing worth doing.
+ */
+export function interestPrincipal(wave, coins) {
+  return Math.min(coins, waveClearBonus(wave) * 45);
 }
 
 export const BOSS_INTERVAL = 5;
@@ -247,6 +296,11 @@ export const UPGRADES = {
   coinBonus:   { tab: 'utility', label: 'coins', name: 'Salvage Rig',     desc: 'Coins from every source',    base: 150,  growth: 1.20,  add: 0.075, fmt: 'pctBonus' },
   magnet:      { tab: 'utility', label: 'magnet', name: 'Tractor Field',   desc: 'Pickup collection radius',   base: 150,  growth: 1.19,  add: 11,    fmt: 'flat', maxLevel: 34 },
   evasion:     { tab: 'utility', label: 'dodge', name: 'Thruster Vanes',  desc: 'Autopilot dodge speed',      base: 240,  growth: 1.23,  add: 0.05,  fmt: 'mult', maxLevel: 20 },
+  // Interest turns hoarding into a real option: spend now for power now, or
+  // sit on a balance and compound it. Exponential cost and a hard rate cap on
+  // purpose — the payout already compounds, and a linear curve on top of that
+  // would make banking the only move worth making.
+  interest:    { tab: 'utility', label: 'interest', name: 'Yield Bonds',    desc: 'Interest on banked coins each phase', base: 900,  growth: 1.215, add: 0.005, fmt: 'pct', cap: 0.18, maxLevel: 36 },
   lifesteal:   { tab: 'utility', label: 'siphon', name: 'Siphon Core',     desc: 'Hull restored per kill',     base: 260,  growth: 1.185, add: 0.9,   fmt: 'flat' },
 };
 
@@ -336,7 +390,6 @@ export const LAB = {
   labCoins:     { name: 'Market Analysis', label: 'coins',  desc: 'Coin income',                 base: 5,  growth: 1.18, mul: 1.08 },
   labCrit:      { name: 'Neural Targeting', label: 'crit dmg', desc: 'Critical damage',             base: 9,  growth: 1.19, mul: 1.06 },
   labStartCash: { name: 'Requisition', label: 'start coins',      desc: 'Coins at run start',          base: 4,  growth: 1.22, mul: 2.10, flatBase: 220 },
-  labStartWave: { name: 'Forward Deploy', label: 'start',   desc: 'Levels skipped at run start',  base: 20, growth: 1.33, add: 1 },
   // Run length grows with depth (a wave's spawn window widens with log(wave)),
   // so without this a late run would be a two-hour sit. Buying time compression
   // is the standard idle-game answer and it is strictly quality-of-life, so it
@@ -353,6 +406,7 @@ export const LAB = {
   labFlak:      { name: 'Shrapnel Load',  label: 'flak',     desc: 'Flak damage and burst radius',curve: 'lin', base: 36, step: 11, add: 0.20 },
   labArc:       { name: 'Conduction',     label: 'arc',      desc: 'Arc damage, +1 jump per 3 lv',curve: 'lin', base: 40, step: 12, add: 0.20 },
   labWing:      { name: 'Wing Command',   label: 'wingmen',  desc: 'Wingman rate of fire',        curve: 'lin', base: 34, step: 10, add: 0.18 },
+  labInterest:  { name: 'Compound Theory', label: 'interest', desc: 'Interest rate on banked coins', base: 26, growth: 1.235, mul: 1.10 },
   labOffline:   { name: 'Autopilot', label: 'offline',        desc: 'Offline coin generation',     base: 25, growth: 1.28, mul: 1.25 },
 };
 
@@ -393,26 +447,6 @@ export function labMult(key, level) {
   return Math.pow(l.mul, lv);
 }
 
-/**
- * Coins a run would have banked earning its way to `startWave` unaided.
- *
- * Forward Deploy skips waves but used to skip their income too. Under the old
- * all-exponential costs the first levels were cheap enough to catch up from
- * nothing; with linear curves the ramp is slower, and a run starting on wave 7
- * with an empty wallet simply died there — runs 3 and 4 of a test career both
- * ended on wave 10 for exactly this reason. Granting the skipped income makes
- * the research an actual shortcut rather than a trap.
- */
-export function catchUpCoins(startWave) {
-  if (startWave <= 1) return 0;
-  let total = 0;
-  for (let w = 1; w < startWave; w++) {
-    // Roughly half of dropped loot is actually collected in flight.
-    total += coinValue(w) * enemyCount(w) * 0.5 + waveClearBonus(w);
-  }
-  return total;
-}
-
 /** Coins granted at the start of a run by Requisition. */
 export function startingCoins(level) {
   if (!level) return 0;
@@ -420,15 +454,16 @@ export function startingCoins(level) {
 }
 
 /**
- * Difficulty step a new run begins on.
+ * Every run starts at the beginning.
  *
- * Snapped to the START of a level. Deploying into an arbitrary step could drop
- * a fresh, unupgraded ship straight onto a boss with no ramp — a test career
- * had a run end three seconds after deploying for exactly that reason. Skipping
- * whole levels also matches how the run is presented.
+ * Forward Deploy used to skip levels, and it never worked: skipping the early
+ * levels also skips their income and their upgrade ramp, so it was either a
+ * trap or needed a pile of compensating catch-up coins to be survivable — at
+ * which point it was just a slower way to be handed resources. Difficulty tiers
+ * do the job it was reaching for, properly.
  */
-export function startingWave(level) {
-  return (LAB.labStartWave.add * (level || 0)) * BOSS_INTERVAL + 1;
+export function startingWave() {
+  return 1;
 }
 
 /** Speed steps the player may select, widened by Temporal Rig. */
@@ -561,11 +596,12 @@ export const TUNING = {
 };
 
 /** Cores awarded for a run that reached `maxWave`. */
-export function coresForRun(maxWave, coreYieldLevel = 0) {
+export function coresForRun(maxWave, coreYieldLevel = 0, diffIndex = 0) {
   if (maxWave < 5) return 0;
   const yieldMult = labMult('labCoreYield', coreYieldLevel);
   return Math.floor(
-    TUNING.CORE_SCALE * Math.pow(TUNING.CORE_BASE, maxWave) * Math.pow(maxWave, 0.9) * yieldMult
+    TUNING.CORE_SCALE * Math.pow(TUNING.CORE_BASE, maxWave) * Math.pow(maxWave, 0.9) *
+    yieldMult * difficulty(diffIndex).cores
   );
 }
 
@@ -661,6 +697,7 @@ export function deriveStats(up, lab, prestigeCount) {
     wingRate:     SYSTEM.wingFraction * wWing,
 
     coinMult:    coinMult * (1 + U.coinBonus.add * lv('coinBonus')),
+    interest:    Math.min(0.24, U.interest.add * lv('interest') * labMult('labInterest', lab.labInterest)),
     // Pickups have to be flown over to be collected, so magnet radius is a
     // real economy stat, not a convenience: without it, loot drifts off-screen.
     magnet:      92 + U.magnet.add * lv('magnet'),

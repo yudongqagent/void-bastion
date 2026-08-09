@@ -118,6 +118,7 @@
     <div class="menu-actions">
       <button class="btn ghost" id="menuLabBtn">RESEARCH LAB</button>
       <button class="btn ghost" id="menuAscendBtn">ASCEND</button>
+      <button class="btn ghost" id="menuHomeBtn">CHANGE DIFFICULTY</button>
       <button class="btn ghost" id="menuHelpBtn">HOW TO PLAY</button>
       <button class="btn danger-ghost" id="wipeBtn">ERASE ALL PROGRESS</button>
     </div>
@@ -138,6 +139,21 @@
       <li><b>It idles.</b> Leave it running and collect, or play actively with abilities and fast buys. Progress saves automatically.</li>
     </ul>
     <button class="btn primary" data-close>GOT IT</button>
+  </div>
+</div>
+
+<!-- ── home / difficulty select ───────────────────────────────── -->
+<div id="home" class="home" hidden>
+  <div class="home-inner">
+    <div class="home-mark">&#11041;</div>
+    <h1 class="home-title">VOID BASTION</h1>
+    <p class="home-sub">Choose your theatre of operations.</p>
+
+    <div id="diffList" class="diff-list"></div>
+
+    <div class="home-stats" id="homeStats"></div>
+    <button class="btn primary" id="launchBtn">LAUNCH</button>
+    <button class="btn ghost" id="homeHelpBtn">HOW TO PLAY</button>
   </div>
 </div>
 
