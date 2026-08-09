@@ -38,6 +38,31 @@ backdrop, scroll speed, hazard mix and one rule twist, cycling forever so wave
 unlock in the Lab and fire from the bottom bar or the <kbd>1</kbd>–<kbd>5</kbd>
 keys. Progress saves to `localStorage` automatically.
 
+### Guns fire straight
+
+The cannon, the wingmen and the laser all fire straight forward. They used to
+swing within a wide cone toward whatever was tracked, which quietly did the
+player's job: position stopped mattering because the barrels covered the lane by
+themselves.
+
+Extra barrels are spaced **across the nose rather than fanned outward** — a fan
+is a cone by another name, widening with distance to cover ground nobody earned.
+Parallel streams give a fixed, honest footprint you have to put over the target
+yourself.
+
+Two things fall out of this. Positioning becomes the thing that produces damage,
+for the autopilot and for you when you take the stick. And the weapon systems
+gain a reason to exist that they never quite had: missiles home, the arc coil
+chains, flak is lobbed at a cluster — none of them care about facing, so buying
+one is how you cover the angles a fixed gun cannot.
+
+Removing the cone cost about half the run depth. Rather than hand the damage
+back as a stat, the pilot got better at earning it: target **hysteresis** so it
+commits to a firing line instead of swapping every time two craft trade places,
+and **leading** so it steers to where a weaving target will be rather than where
+it was. That recovered nearly all of it — run 1 went 8 levels back to 16 with no
+change to any number.
+
 ### The autopilot
 
 The steering behaviour is the heart of "fun to watch". Four weighted urges are

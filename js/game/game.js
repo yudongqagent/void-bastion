@@ -56,9 +56,9 @@ const SWARM_DENSITY = 2.1;
 // Drone that gained a gun still charges you — it just shoots on the way in.
 const ARTILLERY = new Set(['sentinel', 'gunship', 'radial', 'lancer', 'dread']);
 
-// How far off straight-up the guns may swing. Wide enough to cover the lane,
-// narrow enough that the ship never looks like it is shooting sideways.
-const AIM_CONE = 0.62;
+// Half-width of the laser column, before mastery widens it. The laser is a
+// gun too, so it fires up the same straight line the cannon does.
+const LASER_HALF_WIDTH = 9;
 
 // Palette. Values above 1.0 are intentional: the renderer's HDR target turns
 // that overshoot into bloom, so "hot" is literally a bigger number.
@@ -116,7 +116,7 @@ const newEnemy = () => ({
   fireT: 0, phase: false, phaseT: 0, distScale: 1, stun: 0,
   behavior: 'dive', t: 0, homeX: 0, amp: 0, freq: 0, holdY: 0, face: 0,
   ground: false, hull: null, accent: null, smokeT: 0,
-  blast: 0, aura: 0, warded: 0, pack: 1,
+  blast: 0, aura: 0, warded: 0, pack: 1, lastX: null,
   weapon: null, wcd: 0, elite: false, burst: 0, burstT: 0, spin2: 0, bossDef: null,
 });
 
@@ -700,11 +700,18 @@ export class Game {
       ay += ((bestP.y - ship.y) / (bestD || 1)) * 380;
     }
 
-    // 4 — line up the shot. Weak on purpose: it should lose to anything about
-    // to hit us, so the ship breaks off an attack run to dodge and drifts back.
+    // 4 — line up the shot. With fixed guns this is how damage happens at all,
+    // so it pulls considerably harder than it did when the barrels could swing.
+    // It still loses to an imminent threat: the ship breaks off to dodge and
+    // slides back onto the target afterwards, which is what makes the autopilot
+    // look like it is flying rather than drifting.
     if (this.target) {
-      const tdx = this.target.x - ship.x;
-      ax += Math.max(-1, Math.min(1, tdx / 90)) * 780;
+      // Lead it. Weaving craft drift sideways, and steering at where one was
+      // guarantees arriving a beat late for its whole approach.
+      const t = this.target;
+      const lead = (t.lastX != null ? (t.x - t.lastX) / Math.max(dt, 1e-4) : 0) * 0.22;
+      const tdx = t.x + Math.max(-90, Math.min(90, lead)) - ship.x;
+      ax += Math.max(-1, Math.min(1, tdx / 55)) * 2400;
     }
 
     // 5 — station keeping
@@ -768,19 +775,41 @@ export class Game {
    * gently lines up on it, which restores the damage AND makes the pilot look
    * like it is aiming rather than spraying.
    */
+  /**
+   * The craft worth lining up under.
+   *
+   * With fixed guns this is no longer "what am I shooting" but "where should I
+   * be", so lateral offset dominates the score: something slightly further away
+   * but nearly dead ahead is a better answer than something close but off to
+   * the side that the guns cannot reach anyway.
+   */
   acquireTarget() {
     const ship = this.ship;
     const reach = this.stats.range * 1.8;
+    const score = (e) => {
+      const dx = Math.abs(e.x - ship.x), dy = ship.y - e.y;
+      if (dy > reach) return Infinity;
+      return dy * 0.35 + dx * 1.6;
+    };
+    const eligible = (e) =>
+      e.active && e.y <= ship.y + 24 && !(e.phase && Math.sin(e.phaseT) > 0.55);
+
     let best = null, bestScore = Infinity;
     for (const e of this.enemies.items) {
-      if (!e.active) continue;
-      if (e.y > ship.y + 24) continue;                 // already behind us
-      if (e.phase && Math.sin(e.phaseT) > 0.55) continue;
-      const dx = e.x - ship.x, dy = e.y - ship.y;
-      const d = Math.hypot(dx, dy);
-      if (d > reach) continue;
-      const score = d + Math.abs(dx) * 0.9;            // prefer dead ahead
-      if (score < bestScore) { bestScore = score; best = e; }
+      if (!eligible(e)) continue;
+      const sc = score(e);
+      if (sc < bestScore) { bestScore = sc; best = e; }
+    }
+
+    // Hysteresis: stay on the current target unless something is clearly
+    // better. Without it the ship swaps target the instant two craft trade
+    // places and spends the whole wave sliding between firing lines instead of
+    // holding one — with fixed guns that is the difference between shooting and
+    // merely aiming.
+    const cur = this.target;
+    if (cur && eligible(cur)) {
+      const curScore = score(cur);
+      if (curScore < bestScore * 1.45) return cur;
     }
     return best;
   }
@@ -794,15 +823,19 @@ export class Game {
 
     const ship = this.ship;
     const aim = this.aimAngle();
-    const spread = 0.13;
+    // Extra barrels are spaced ACROSS the nose, not fanned outward. A fan is a
+    // cone by another name — it widens with distance and covers ground the
+    // player never had to earn. Parallel streams give a fixed, honest footprint
+    // you have to put over the target yourself.
+    const spacing = 11;
     for (let i = 0; i < s.shots; i++) {
-      const off = s.shots > 1 ? (i - (s.shots - 1) / 2) * spread : 0;
-      const ang = aim + off + ship.bank * 0.1;
+      const lateral = s.shots > 1 ? (i - (s.shots - 1) / 2) * spacing : 0;
+      const ang = aim;
       const crit = Math.random() < s.critChance;
       const b = this.bullets.obtain();
       b.active = true;
-      b.x = ship.x + Math.cos(ang) * 18;
-      b.y = ship.y + Math.sin(ang) * 18;
+      b.x = ship.x + lateral;
+      b.y = ship.y - 18;
       const speed = 760;
       b.vx = Math.cos(ang) * speed;
       b.vy = Math.sin(ang) * speed;
@@ -1446,6 +1479,7 @@ export class Game {
     for (let i = 0; i < items.length; i++) {
       const e = items[i];
       if (!e.active) continue;
+      e.lastX = e.x;
       e.t += dt;
       if (e.hitFlash > 0) e.hitFlash -= dt;
       if (e.phase) e.phaseT += dt * 2.6;
@@ -1611,18 +1645,21 @@ export class Game {
     }
   }
 
-  /** Shared firing angle: leads the current target inside the forward cone. */
+  /**
+   * Guns fire straight forward. Always.
+   *
+   * They used to swing within a wide cone toward whatever was tracked, which
+   * quietly did the player's job for them: position stopped mattering because
+   * the barrels covered the lane by themselves. Firing straight puts that work
+   * back where it belongs — on the autopilot lining the ship up, and on the
+   * player when they take the stick.
+   *
+   * It also gives the weapon systems a reason to exist. Missiles home, the arc
+   * coil chains and flak is lobbed; none of them care about facing. A straight
+   * gun leaves angles uncovered, and buying a system is how you cover them.
+   */
   aimAngle() {
-    let aim = -Math.PI / 2;
-    const t = this.target;
-    if (t) {
-      const raw = Math.atan2(t.y - this.ship.y, t.x - this.ship.x);
-      let delta = raw - aim;
-      while (delta > Math.PI) delta -= TAU;
-      while (delta < -Math.PI) delta += TAU;
-      aim += Math.max(-AIM_CONE, Math.min(AIM_CONE, delta));
-    }
-    return aim;
+    return -Math.PI / 2;
   }
 
   // --- auto-firing weapon systems ------------------------------------------
@@ -1642,53 +1679,39 @@ export class Game {
   }
 
   /** Continuous beam welded to whatever the guns are tracking. */
+  /** Continuous beam straight up the lane, cutting whatever is in the column. */
   updateLaser(dt, s) {
-    let t = this.target;
-    if (!t || !t.active) {
-      let bd = 1e9;
-      for (const e of this.enemies.items) {
-        if (!e.active || e.y > this.ship.y) continue;
-        const d = Math.hypot(e.x - this.ship.x, e.y - this.ship.y);
-        if (d < bd) { bd = d; t = e; }
-      }
-    }
-    this.laserTarget = t || null;
-    if (!t) return;
+    const ship = this.ship;
+    const half = LASER_HALF_WIDTH + s.laserTier * 6;
 
-    // Mastery lets the beam cut through to targets behind the first, which is
-    // the visible payoff for committing to it: a deep laser build carves a line
-    // through a formation instead of drilling one craft at a time.
     this.laserChain.length = 0;
-    this.laserChain.push(t);
-    if (s.laserPierce > 1) {
-      const dx = t.x - this.ship.x, dy = t.y - this.ship.y;
-      const len = Math.hypot(dx, dy) || 1;
-      const ux = dx / len, uy = dy / len;
-      for (const e of this.enemies.items) {
-        if (!e.active || e === t) continue;
-        const ex = e.x - this.ship.x, ey = e.y - this.ship.y;
-        const along = ex * ux + ey * uy;
-        if (along < len) continue;                       // behind the primary
-        const perp = Math.abs(ex * uy - ey * ux);
-        if (perp > e.radius + 9) continue;               // not on the line
-        this.laserChain.push(e);
-        if (this.laserChain.length >= s.laserPierce) break;
-      }
+    for (const e of this.enemies.items) {
+      if (!e.active || e.y > ship.y - 6) continue;
+      if (e.phase && Math.sin(e.phaseT) > 0.55) continue;
+      if (Math.abs(e.x - ship.x) > e.radius + half) continue;
+      this.laserChain.push(e);
     }
+    // Nearest first, so mastery pierces the front of the column outward.
+    this.laserChain.sort((a, b) => b.y - a.y);
+    if (this.laserChain.length > s.laserPierce) this.laserChain.length = s.laserPierce;
+    this.laserTarget = this.laserChain[0] || null;
+    if (!this.laserTarget) return;
+
     for (const hit of this.laserChain) {
       this.damageEnemy(hit, s.laserDps * dt, false, false);
     }
+
     this.laserTick -= dt;
     if (this.laserTick <= 0) {
       this.laserTick = 0.45;
-      // Periodic number so the beam's contribution is legible, rather than HP
-      // silently draining with no feedback.
+      const t = this.laserTarget;
       this.addFloater(t.x, t.y - t.radius, fmtShort(s.laserDps * 0.45), [0.5, 1.4, 1.7], 0.8);
       if (Math.random() < 0.5) this.synth.hit();
     }
-    for (let i = 0; i < 2; i++) {
-      this.spawnParticle(t.x + (Math.random() - 0.5) * t.radius,
-        t.y + (Math.random() - 0.5) * t.radius,
+    for (const hit of this.laserChain) {
+      if (Math.random() > 0.5) continue;
+      this.spawnParticle(hit.x + (Math.random() - 0.5) * hit.radius,
+        hit.y + (Math.random() - 0.5) * hit.radius,
         (Math.random() - 0.5) * 130, (Math.random() - 0.5) * 130,
         0.16, 2.4, [0.5, 1.4, 1.7], 0.9, 1);
     }
@@ -2570,19 +2593,27 @@ export class Game {
     const R = this.renderer;
     const s = this.stats;
 
-    if (s.laserDps > 0 && this.laserTarget && this.laserTarget.active) {
-      const t = this.laserChain.length ? this.laserChain[this.laserChain.length - 1] : this.laserTarget;
+    if (s.laserDps > 0) {
+      // A column, running to the last thing it is cutting — or off the top of
+      // the lane when it is cutting nothing.
+      const last = this.laserChain.length
+        ? this.laserChain[this.laserChain.length - 1] : null;
+      const topY = last ? last.y : this.y0 - 20;
       const wob = Math.sin(time * 40) * 1.1;
-      const wide = 3.4 + s.laserTier * 1.5;
-      R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, wide + wob * 0.5, 0.35, 1.25, 1.7, 0.42, 0.85);
-      R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, 1.3 + s.laserTier * 0.5, 1.5, 1.85, 2.0, 0.9, 0.5);
+      const wide = 3.4 + s.laserTier * 1.6;
+      const lit = last ? 1 : 0.45;
+      const x = this.ship.x;
+      R.beam(x, this.ship.y - 12, x, topY, wide + wob * 0.5, 0.35, 1.25, 1.7, 0.42 * lit, 0.85);
+      R.beam(x, this.ship.y - 12, x, topY, 1.3 + s.laserTier * 0.5, 1.5, 1.85, 2.0, 0.9 * lit, 0.5);
       for (const hit of this.laserChain) {
         R.glow(hit.x, hit.y, 18, 0.5, 1.4, 1.8, 0.5, 1.7);
       }
-      R.glow(t.x, t.y, 26 + wob * 2, 0.5, 1.4, 1.8, 0.6, 1.6);
-      R.ring(t.x, t.y, t.radius + 6 + Math.sin(time * 18) * 2, 1.5,
-        0.6, 1.5, 1.9, 0.7);
-      R.glow(this.ship.x, this.ship.y - 14, 16, 0.5, 1.4, 1.8, 0.55, 1.7);
+      if (last) {
+        R.glow(last.x, last.y, 26 + wob * 2, 0.5, 1.4, 1.8, 0.6, 1.6);
+        R.ring(last.x, last.y, last.radius + 6 + Math.sin(time * 18) * 2, 1.5,
+          0.6, 1.5, 1.9, 0.7);
+      }
+      R.glow(x, this.ship.y - 14, 16, 0.5, 1.4, 1.8, 0.55 * lit, 1.7);
     }
 
     for (const sh of this.shells) {
