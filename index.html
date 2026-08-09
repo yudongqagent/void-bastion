@@ -21,11 +21,14 @@
 <header id="hud">
   <div class="hud-row">
     <div class="stat wave">
-      <span class="stat-label">WAVE</span>
+      <span class="stat-label">LVL</span>
       <strong id="waveNum">1</strong>
       <span id="bossTag" class="boss-tag" hidden>BOSS</span>
     </div>
-    <div class="zone" id="zoneName">OUTER REACH</div>
+    <div class="zone">
+      <span id="zoneName">OUTER REACH</span>
+      <i class="phase-dots" id="phaseDots"></i>
+    </div>
     <div class="stat coins">
       <span class="pip pip-coin"></span>
       <strong id="coinNum">0</strong>
@@ -130,7 +133,7 @@
       <li><b class="c-core">Cores</b> come from ascending. Spend them in the <b>LAB</b> on permanent bonuses that make every future run stronger.</li>
       <li><b>Most enemies attack by ramming.</b> They die on impact, so your guns and your pilot are both defences. <b>Coins drop as loot</b> &mdash; fly over them, or buy Tractor Field to hoover them up.</li>
       <li><b>Runs are meant to end.</b> Enemy health grows exponentially; your run upgrades do not. When you stall, ascend and come back harder.</li>
-      <li><b>Every 10th wave is a boss</b>, and each one opens a new <b>zone</b> with its own hazards and payout. Every 25th wave pays a milestone bonus.</li>
+      <li><b>The run is a sequence of levels.</b> Each is its own map with four enemy phases and a boss that belongs to it. Clear it and the next level begins &mdash; new terrain, new boss, and the enemies refit as you go deeper.</li>
       <li><b>Abilities</b> unlock in the Lab and sit just above the upgrade panel. Tap them, or press <kbd>1</kbd>–<kbd>5</kbd>.</li>
       <li><b>It idles.</b> Leave it running and collect, or play actively with abilities and fast buys. Progress saves automatically.</li>
     </ul>

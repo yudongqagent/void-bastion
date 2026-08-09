@@ -89,6 +89,11 @@ function autoBuy() {
     state.run.coins -= best.cost;
     state.run.upgrades[best.key] = best.lvl + 1;
     game.markStatsDirty();
+    // Mirror UI.buy(): raising the cap also repairs, or the ship sits at a
+    // fraction of its new maximum and dies to the first thing it meets.
+    if (best.key === 'maxHull') {
+      state.run.hull = Math.min(game.stats.maxHull, state.run.hull + UPGRADES.maxHull.add);
+    }
     bought++;
   }
 }
@@ -101,6 +106,7 @@ let peakEnemies = 0, peakBullets = 0, peakParticles = 0, peakPickups = 0;
 let totalBought = 0, revives = 0;
 let collected = 0, lastCoins = state.run.coins;
 
+totalBought += autoBuy();   // spend starting coins before wave one
 console.log('\n  VOID BASTION — headless loop test');
 console.log(`  driving the real Game.update() at ${Math.round(1 / DT)}Hz\n`);
 if (VERBOSE) console.log('  wave   dur    kills    coins       hull      alive');

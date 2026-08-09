@@ -100,7 +100,22 @@ html, body {
 }
 .stat-label { color: var(--text-dim); font-size: 10px; }
 .stat.wave strong { color: var(--cyan); text-shadow: 0 0 12px rgba(77,240,255,0.6); }
+.phase-dots {
+  display: flex;
+  gap: 3px;
+  margin-top: 3px;
+}
+.phase-dots i {
+  width: 9px; height: 3px;
+  border-radius: 2px;
+  background: rgba(140, 170, 190, 0.28);
+}
+.phase-dots i.done { background: var(--cyan); box-shadow: 0 0 5px var(--cyan); }
+.phase-dots i.boss { width: 13px; background: var(--magenta); box-shadow: 0 0 6px var(--magenta); }
+
 .zone {
+  display: flex;
+  flex-direction: column;
   font-size: 8px;
   letter-spacing: 0.14em;
   color: var(--violet);
@@ -349,6 +364,22 @@ html, body {
 .v-next  { color: var(--green); font-weight: 700; }
 .up-sub  { font-size: 9px; color: var(--text-dim); }
 
+/* Mastery line on weapon cards: what the system does now, and what depth buys. */
+.up-mastery {
+  font-size: 8.5px;
+  line-height: 1.3;
+  color: var(--text-dim);
+  white-space: normal;
+}
+.up-mastery b {
+  color: var(--gold);
+  margin-right: 3px;
+}
+.up-mastery em {
+  font-style: normal;
+  opacity: 0.65;
+}
+
 /* The price doubles as the button face, so affordability is unmistakable. */
 .up-buy {
   display: flex;
@@ -575,6 +606,37 @@ kbd {
 }
 
 /* ── toasts ───────────────────────────────────────────────────── */
+
+/* Level card: the run's chapter heading. Big, brief, and out of the way. */
+.level-card {
+  padding: 12px 20px 11px;
+  text-align: center;
+  color: var(--text);
+  background: rgba(6, 14, 26, 0.94);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--cyan);
+  border-radius: 9px;
+  box-shadow: 0 0 34px rgba(77, 240, 255, 0.22);
+  animation: toastin 0.35s cubic-bezier(0.22,1,0.36,1), toastout 0.5s ease 3.0s forwards;
+}
+.level-card .lc-lvl {
+  font-size: 9px; letter-spacing: 0.24em; color: var(--text-dim);
+}
+.level-card .lc-name {
+  font-size: 16px; font-weight: 700; letter-spacing: 0.14em;
+  color: var(--cyan); text-shadow: 0 0 16px rgba(77,240,255,0.5);
+  margin: 3px 0 5px;
+}
+.level-card .lc-boss {
+  font-size: 10px; letter-spacing: 0.1em; color: var(--magenta);
+}
+.level-card .lc-tell { font-size: 9.5px; color: var(--text-dim); margin-top: 3px; }
+.level-card .lc-refit {
+  display: inline-block; margin-top: 6px; padding: 2px 7px;
+  font-size: 8.5px; letter-spacing: 0.12em; color: var(--gold);
+  background: rgba(255, 201, 77, 0.12);
+  border: 1px solid rgba(255, 201, 77, 0.3); border-radius: 3px;
+}
 
 #toasts {
   position: fixed;

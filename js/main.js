@@ -122,14 +122,16 @@ function handleEvents() {
   for (const ev of game.events) {
     switch (ev.type) {
       case 'boss':
-        ui.toast(`WAVE ${ev.data.wave} — BOSS INBOUND`, 'danger', true);
+        ui.toast(`${ev.data.name} INBOUND`, 'danger', true);
         break;
       case 'bossKill':
         ui.toast('BOSS DESTROYED', 'gold');
         break;
       case 'sector':
-        ui.toast(`ZONE ${ev.data.index} — ${ev.data.sector.name}`, 'violet', true);
         ui.setZone(ev.data.sector);
+        break;
+      case 'levelStart':
+        ui.showLevelCard(ev.data);
         break;
       case 'milestone':
         ui.toast(`MILESTONE — WAVE ${ev.data.wave}`, 'gold', true);

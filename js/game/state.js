@@ -6,6 +6,7 @@
 
 import {
   LAB, ABILITIES, startingWave, startingCoins, labMult, deriveStats, coresForRun,
+  catchUpCoins,
 } from './balance.js';
 
 const KEY = 'void-bastion:save:v1';
@@ -33,7 +34,7 @@ export function freshRun(meta) {
     wave,
     startWave: wave,
     upgrades: {},
-    coins: startingCoins(meta.lab.labStartCash),
+    coins: startingCoins(meta.lab.labStartCash) + catchUpCoins(wave),
     hull: stats.maxHull,
     shield: stats.maxShield,
     kills: 0,
@@ -41,6 +42,7 @@ export function freshRun(meta) {
     cooldowns: {},        // ability key -> seconds remaining
     over: false,
     iframe: 0,            // grace period after a capped hit
+    spawnGuard: 2.5,      // invulnerable while the run settles in
     banked: false,        // set once bankRun() has paid this run out
     bankedCores: 0,
   };

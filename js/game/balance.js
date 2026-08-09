@@ -46,7 +46,8 @@ export function enemyCount(wave) {
  * rises naturally with the count.
  */
 export function spawnWindow(wave) {
-  return 7 + 5 * Math.log10(wave + 1);
+  // Budgeted so four phases plus a boss come to roughly ninety seconds.
+  return 6 + 3.4 * Math.log10(wave + 1);
 }
 
 /** Movement speed in world units/sec. Deliberately near-flat. */
@@ -74,18 +75,18 @@ export function waveClearBonus(wave) {
   return 14 * Math.pow(wave, 1.12) * Math.pow(1.03, wave);
 }
 
-export const BOSS_INTERVAL = 10;
+export const BOSS_INTERVAL = 5;
 export const isBossWave = (wave) => wave % BOSS_INTERVAL === 0;
 
 /** Boss stat block, derived from the wave it appears on. */
 export function bossStats(wave) {
   const tier = Math.floor(wave / BOSS_INTERVAL); // 1, 2, 3, ...
   return {
-    hp: enemyHP(wave) * (13 + tier * 1.6),
+    hp: enemyHP(wave) * (9 + tier * 1.1),
     speed: enemySpeed(wave) * 0.52,
     damage: enemyDamage(wave) * 2.4,
     radius: 26 + Math.min(16, tier * 0.9),
-    coins: coinValue(wave) * (11 + tier * 1.3),
+    coins: coinValue(wave) * (8 + tier * 1.0),
   };
 }
 
@@ -221,7 +222,7 @@ export const WEAPONS = {
 // idle-game decay: every level is worth buying, each is worth a little less.
 
 export const UPGRADES = {
-  damage:      { tab: 'offense', label: 'dmg', name: 'Plasma Yield',    desc: 'Damage per shot',            base: 22,   growth: 1.125, add: 5.5,   fmt: 'flat' },
+  damage:      { tab: 'offense', label: 'dmg', name: 'Plasma Yield',    desc: 'Damage per shot',            curve: 'lin', base: 26,    step: 15,   add: 5.5,   fmt: 'flat' },
   fireRate:    { tab: 'offense', label: 'rate', name: 'Cycle Rate',      desc: 'Shots per second',           base: 40,   growth: 1.145, add: 0.11,  fmt: 'rate' },
   critChance:  { tab: 'offense', label: 'crit', name: 'Targeting AI',    desc: 'Critical hit chance',        base: 90,   growth: 1.165, add: 0.014, fmt: 'pct', cap: 0.75, maxLevel: 52 },
   critMult:    { tab: 'offense', label: 'crit dmg', name: 'Overcharge',      desc: 'Critical damage multiplier', base: 130,  growth: 1.155, add: 0.16,  fmt: 'mult' },
@@ -230,13 +231,13 @@ export const UPGRADES = {
   range:       { tab: 'offense', label: 'range', name: 'Sensor Array',    desc: 'How far up the lane you track', base: 55, growth: 1.135, add: 11,    fmt: 'flat' },
 
   // --- weapon systems: level 0 means "not owned yet" ---------------------
-  laser:       { tab: 'offense' , tint: 'laser', label: 'laser',    name: 'Pulse Laser',    desc: 'Continuous beam on your target',   base: 700,  growth: 1.20,  add: 62,  fmt: 'flat' },
-  missiles:    { tab: 'offense' , tint: 'missile', label: 'missile',  name: 'Seeker Pod',     desc: 'Homing missiles, more per level',  base: 1000, growth: 1.24,  add: 55,  fmt: 'flat' },
-  flak:        { tab: 'offense' , tint: 'flak', label: 'flak',     name: 'Flak Cannon',    desc: 'Airbursts over enemy clusters',    base: 1400, growth: 1.23,  add: 105, fmt: 'flat' },
-  arc:         { tab: 'offense' , tint: 'arc', label: 'arc',      name: 'Arc Coil',       desc: 'Lightning chaining between enemies', base: 1800, growth: 1.24, add: 84, fmt: 'flat' },
+  laser:      { tab: 'offense' , tint: 'laser', label: 'laser',    name: 'Pulse Laser',    desc: 'Continuous beam on your target',   curve: 'lin', base: 1300, step: 160, add: 360, fmt: 'flat' },
+  missiles:      { tab: 'offense' , tint: 'missile', label: 'missile',  name: 'Seeker Pod',     desc: 'Homing missiles, more per level',  curve: 'lin', base: 1550, step: 190, add: 190, fmt: 'flat' },
+  flak:      { tab: 'offense' , tint: 'flak', label: 'flak',     name: 'Flak Cannon',    desc: 'Airbursts over enemy clusters',    curve: 'lin', base: 1500, step: 190, add: 300, fmt: 'flat' },
+  arc:      { tab: 'offense' , tint: 'arc', label: 'arc',      name: 'Arc Coil',       desc: 'Lightning chaining between enemies', curve: 'lin', base: 1650, step: 205, add: 440, fmt: 'flat' },
   drones:      { tab: 'offense' , tint: 'wing', label: 'wingmen',  name: 'Escort Wingmen', desc: 'Wingmen firing alongside you',     base: 900,  growth: 1.55,  add: 1,   fmt: 'int', cap: 6, maxLevel: 6 },
 
-  maxHull:     { tab: 'defense', label: 'hull', name: 'Hull Plating',    desc: 'Maximum hull',               base: 30,   growth: 1.125, add: 105,   fmt: 'flat' },
+  maxHull:      { tab: 'defense', label: 'hull', name: 'Hull Plating',    desc: 'Maximum hull',               curve: 'lin', base: 30,    step: 13,   add: 105,   fmt: 'flat' },
   regen:       { tab: 'defense', label: 'regen', name: 'Nanorepair',      desc: 'Hull regenerated per sec',   base: 65,   growth: 1.15,  add: 3.2,   fmt: 'rate' },
   shieldMax:   { tab: 'defense', label: 'shield', name: 'Deflector',       desc: 'Shield capacity',            base: 70,   growth: 1.14,  add: 30,    fmt: 'flat' },
   shieldRegen: { tab: 'defense', label: 'sh/s', name: 'Capacitor',       desc: 'Shield recharged per sec',   base: 95,   growth: 1.155, add: 2.4,   fmt: 'rate' },
@@ -249,15 +250,38 @@ export const UPGRADES = {
   lifesteal:   { tab: 'utility', label: 'siphon', name: 'Siphon Core',     desc: 'Hull restored per kill',     base: 260,  growth: 1.185, add: 0.9,   fmt: 'flat' },
 };
 
+// Two cost curves, and the choice between them is the game's whole build layer.
+//
+// EXPONENTIAL cost against an additive effect makes value-per-coin decay
+// exponentially, so the optimum is always "buy whatever is cheapest per point
+// right now" — which round-robins across the entire tree. Spreading is not a
+// strategy the player picks, it is forced, and every run ends up identical.
+//
+// LINEAR cost decays value only as ~1/n, so a strong upgrade stays strong and
+// deep investment is viable. Paired with a high entry price, that turns the
+// question from "what is cheapest" into "which two things am I building this
+// run around". Stats on this curve grow with sqrt(coins) rather than log(coins),
+// which is a large power increase — hence the higher unit prices and the
+// steeper enemy curve that go with it.
+//
+// Force multipliers stay exponential on purpose: crit, multishot and pierce
+// multiply everything else, and letting those scale with sqrt(coins) would
+// dwarf every other decision.
+
 /** Cost of buying the NEXT level of an upgrade currently at `level`. */
 export function upgradeCost(key, level) {
   const u = UPGRADES[key];
+  if (u.curve === 'lin') return Math.ceil(u.base + u.step * level);
   return Math.ceil(u.base * Math.pow(u.growth, level));
 }
 
-/** Total cost of buying `n` levels starting from `level` (geometric series). */
+/** Total cost of buying `n` levels starting from `level`. */
 export function upgradeBulkCost(key, level, n) {
   const u = UPGRADES[key];
+  if (u.curve === 'lin') {
+    // Arithmetic series: n terms starting at base + step*level.
+    return Math.ceil(n * (u.base + u.step * level) + u.step * (n * (n - 1)) / 2);
+  }
   const r = u.growth;
   return Math.ceil(u.base * Math.pow(r, level) * (Math.pow(r, n) - 1) / (r - 1));
 }
@@ -265,13 +289,21 @@ export function upgradeBulkCost(key, level, n) {
 /** How many levels of `key` are affordable with `coins`, capped by `max`. */
 export function affordableLevels(key, level, coins, max = 1e9) {
   const u = UPGRADES[key];
-  const r = u.growth;
   const headroom = upgradeMaxLevel(key) - level;
   if (headroom <= 0) return 0;
-  const c0 = u.base * Math.pow(r, level);
-  if (coins < c0) return 0;
-  // Invert the geometric series: n = log_r(1 + coins*(r-1)/c0)
-  const n = Math.floor(Math.log(1 + (coins * (r - 1)) / c0) / Math.log(r));
+  if (coins < upgradeCost(key, level)) return 0;
+
+  let n;
+  if (u.curve === 'lin') {
+    // Invert the arithmetic series: solve (step/2)k^2 + Bk - coins = 0.
+    const B = u.base + u.step * level - u.step / 2;
+    n = Math.floor((-B + Math.sqrt(B * B + 2 * u.step * coins)) / u.step);
+  } else {
+    const r = u.growth;
+    const c0 = u.base * Math.pow(r, level);
+    // Invert the geometric series: n = log_r(1 + coins*(r-1)/c0)
+    n = Math.floor(Math.log(1 + (coins * (r - 1)) / c0) / Math.log(r));
+  }
   return Math.max(0, Math.min(n, max, headroom));
 }
 
@@ -304,30 +336,81 @@ export const LAB = {
   labCoins:     { name: 'Market Analysis', label: 'coins',  desc: 'Coin income',                 base: 5,  growth: 1.18, mul: 1.08 },
   labCrit:      { name: 'Neural Targeting', label: 'crit dmg', desc: 'Critical damage',             base: 9,  growth: 1.19, mul: 1.06 },
   labStartCash: { name: 'Requisition', label: 'start coins',      desc: 'Coins at run start',          base: 4,  growth: 1.22, mul: 2.10, flatBase: 220 },
-  labStartWave: { name: 'Forward Deploy', label: 'start',   desc: 'Waves skipped at run start',  base: 20, growth: 1.33, add: 4 },
+  labStartWave: { name: 'Forward Deploy', label: 'start',   desc: 'Levels skipped at run start',  base: 20, growth: 1.33, add: 1 },
   // Run length grows with depth (a wave's spawn window widens with log(wave)),
   // so without this a late run would be a two-hour sit. Buying time compression
   // is the standard idle-game answer and it is strictly quality-of-life, so it
   // is priced low and deliberately does not touch any reward.
   labSpeed:     { name: 'Temporal Rig', label: 'max speed',     desc: 'Maximum simulation speed',    base: 40, growth: 3.20, add: 1, maxLevel: 3 },
   labCoreYield: { name: 'Core Extraction', label: 'cores',  desc: 'Cores earned per run',        base: 30, growth: 1.30, mul: 1.12 },
-  labLaser:     { name: 'Beam Focusing',  label: 'laser',    desc: 'Pulse Laser damage',          base: 16, growth: 1.20, mul: 1.11 },
-  labMissile:   { name: 'Warhead Design', label: 'missile',  desc: 'Seeker Pod damage',           base: 18, growth: 1.20, mul: 1.11 },
-  labFlak:      { name: 'Shrapnel Load',  label: 'flak',     desc: 'Flak damage and burst radius',base: 20, growth: 1.21, mul: 1.10 },
-  labArc:       { name: 'Conduction',     label: 'arc',      desc: 'Arc damage, +1 jump per 3 lv',base: 22, growth: 1.21, mul: 1.10 },
-  labWing:      { name: 'Wing Command',   label: 'wingmen',  desc: 'Wingman rate of fire',        base: 24, growth: 1.22, mul: 1.09 },
+  // Weapon research is LINEAR cost with an ADDITIVE bonus, so Cores can be
+  // poured into one system and specialise a permanent build. It is additive
+  // rather than compounding for the same reason the cost is linear: a
+  // multiplicative bonus reached via sqrt(cores) levels would grow as
+  // exp(sqrt(cores)) and outrun the entire prestige curve within a few runs.
+  labLaser:     { name: 'Beam Focusing',  label: 'laser',    desc: 'Pulse Laser damage',          curve: 'lin', base: 30, step: 9,  add: 0.22 },
+  labMissile:   { name: 'Warhead Design', label: 'missile',  desc: 'Seeker Pod damage',           curve: 'lin', base: 32, step: 10, add: 0.22 },
+  labFlak:      { name: 'Shrapnel Load',  label: 'flak',     desc: 'Flak damage and burst radius',curve: 'lin', base: 36, step: 11, add: 0.20 },
+  labArc:       { name: 'Conduction',     label: 'arc',      desc: 'Arc damage, +1 jump per 3 lv',curve: 'lin', base: 40, step: 12, add: 0.20 },
+  labWing:      { name: 'Wing Command',   label: 'wingmen',  desc: 'Wingman rate of fire',        curve: 'lin', base: 34, step: 10, add: 0.18 },
   labOffline:   { name: 'Autopilot', label: 'offline',        desc: 'Offline coin generation',     base: 25, growth: 1.28, mul: 1.25 },
 };
 
 export function labCost(key, level) {
   const l = LAB[key];
+  if (l.curve === 'lin') return Math.ceil(l.base + l.step * level);
   return Math.ceil(l.base * Math.pow(l.growth, level));
 }
 
-/** Compounding multiplier from a lab track at `level`. */
+export function labBulkCost(key, level, n) {
+  const l = LAB[key];
+  if (l.curve === 'lin') {
+    return Math.ceil(n * (l.base + l.step * level) + l.step * (n * (n - 1)) / 2);
+  }
+  const r = l.growth;
+  return Math.ceil(l.base * Math.pow(r, level) * (Math.pow(r, n) - 1) / (r - 1));
+}
+
+/**
+ * Bonus multiplier from a lab track.
+ *
+ * The core tracks (damage, hull, fire rate, coins, crit) COMPOUND and must stay
+ * on an exponential cost curve. That pairing is not a style choice — it is the
+ * relationship that keeps infinite prestige working:
+ *
+ *     ln(CORE_BASE) ~= ln(HP_BASE) * ln(labCostGrowth) / ln(labMultiplier)
+ *
+ * Enemy health is exponential in the wave, so meta power has to be exponential
+ * in the number of prestiges or gains decay to zero. Putting those tracks on a
+ * linear cost would make levels grow with sqrt(cores) and the multiplier grow
+ * as exp(sqrt(cores)), which outruns the curve entirely within a few runs.
+ * The weapon tracks are additive, so they are safe to buy linearly.
+ */
 export function labMult(key, level) {
   const l = LAB[key];
-  return Math.pow(l.mul, level || 0);
+  const lv = level || 0;
+  if (l.add != null && l.mul == null) return 1 + l.add * lv;
+  return Math.pow(l.mul, lv);
+}
+
+/**
+ * Coins a run would have banked earning its way to `startWave` unaided.
+ *
+ * Forward Deploy skips waves but used to skip their income too. Under the old
+ * all-exponential costs the first levels were cheap enough to catch up from
+ * nothing; with linear curves the ramp is slower, and a run starting on wave 7
+ * with an empty wallet simply died there — runs 3 and 4 of a test career both
+ * ended on wave 10 for exactly this reason. Granting the skipped income makes
+ * the research an actual shortcut rather than a trap.
+ */
+export function catchUpCoins(startWave) {
+  if (startWave <= 1) return 0;
+  let total = 0;
+  for (let w = 1; w < startWave; w++) {
+    // Roughly half of dropped loot is actually collected in flight.
+    total += coinValue(w) * enemyCount(w) * 0.5 + waveClearBonus(w);
+  }
+  return total;
 }
 
 /** Coins granted at the start of a run by Requisition. */
@@ -336,9 +419,16 @@ export function startingCoins(level) {
   return LAB.labStartCash.flatBase * (Math.pow(LAB.labStartCash.mul, level) - 1);
 }
 
-/** Wave a new run begins on. */
+/**
+ * Difficulty step a new run begins on.
+ *
+ * Snapped to the START of a level. Deploying into an arbitrary step could drop
+ * a fresh, unupgraded ship straight onto a boss with no ramp — a test career
+ * had a run end three seconds after deploying for exactly that reason. Skipping
+ * whole levels also matches how the run is presented.
+ */
 export function startingWave(level) {
-  return 1 + LAB.labStartWave.add * (level || 0);
+  return (LAB.labStartWave.add * (level || 0)) * BOSS_INTERVAL + 1;
 }
 
 /** Speed steps the player may select, widened by Temporal Rig. */
@@ -351,6 +441,46 @@ export function speedOptions(labSpeedLevel = 0) {
 // buying AI in both harnesses ranks upgrades by DPS-per-coin, and a weapon whose
 // output is invisible to that calculation would simply never get bought.
 export const SYSTEM = { missileCd: 2.5, flakCd: 3.1, arcCd: 1.7, wingFraction: 0.34 };
+
+// ---------------------------------------------------------------------------
+// Weapon mastery tiers
+// ---------------------------------------------------------------------------
+// Linear costs alone do not make specialising worthwhile, because system damage
+// grows with sqrt(spend) and the systems ADD together: splitting a budget four
+// ways yields 4*sqrt(C/4) = 2*sqrt(C), which beats 1*sqrt(C) for concentrating.
+// Measured at a 900K budget, spreading scored 99.5K DPS and all-in laser only
+// 67.6K — the arithmetic actively punished commitment.
+//
+// Breakpoints fix that by making depth superlinear. Crossing one is also a
+// visible change in how the weapon behaves, which is the point: a laser build
+// and a missile build should look like different games against the same wave.
+export const MASTERY = [
+  { at: 0,  mult: 1.0 },
+  { at: 12, mult: 1.7 },
+  { at: 28, mult: 2.9 },
+  { at: 50, mult: 4.6 },
+];
+
+export function masteryTier(level) {
+  let t = 0;
+  for (let i = 1; i < MASTERY.length; i++) if (level >= MASTERY[i].at) t = i;
+  return t;
+}
+export const masteryMult = (level) => MASTERY[masteryTier(level)].mult;
+
+/** What each tier actually does, for the upgrade card and the tooltip. */
+export const MASTERY_TEXT = {
+  laser:    ['single beam', 'beam pierces 2', 'beam pierces 4, wider', 'sweeping cutting beam'],
+  missiles: ['single warheads', 'warheads split on impact', 'cluster munitions', 'saturation salvo'],
+  flak:     ['single airburst', 'double burst', 'triple burst, wider', 'carpet barrage'],
+  arc:      ['chains between targets', 'chains stun briefly', 'forks into two chains', 'permanent tether'],
+};
+
+export function masteryLabel(key, level) {
+  const t = masteryTier(level);
+  const txt = MASTERY_TEXT[key];
+  return txt ? { tier: t, text: txt[t] } : null;
+}
 
 /**
  * Weapon an elite carries. The pool widens with depth, so late elites bring the
@@ -465,6 +595,11 @@ export function deriveStats(up, lab, prestigeCount) {
 
   // Per-system permanent research. Each weapon has its own Lab track, so a
   // player can specialise a build rather than every Core going into raw damage.
+  const mLaser   = masteryMult(lv('laser'));
+  const mMissile = masteryMult(lv('missiles'));
+  const mFlak    = masteryMult(lv('flak'));
+  const mArc     = masteryMult(lv('arc'));
+
   const wLaser   = labMult('labLaser',   lab.labLaser);
   const wMissile = labMult('labMissile', lab.labMissile);
   const wFlak    = labMult('labFlak',    lab.labFlak);
@@ -487,15 +622,16 @@ export function deriveStats(up, lab, prestigeCount) {
   // fire real guns at a fraction of the ship's rate; the rest are on timers.
   const wingCount = Math.min(U.drones.cap, lv('drones'));
   const wingDps = wingCount * damage * fireRate * SYSTEM.wingFraction * wWing * critFactor;
-  const laserDps = U.laser.add * lv('laser') * dmgMult * wLaser;
+  const laserDps = U.laser.add * lv('laser') * dmgMult * wLaser * mLaser;
   const missileLv = lv('missiles');
   const missileDps = missileLv
-    ? ((150 + U.missiles.add * missileLv) * dmgMult * wMissile *
-        Math.min(5, 1 + Math.floor(missileLv / 4))) / SYSTEM.missileCd
+    ? ((150 + U.missiles.add * missileLv) * dmgMult * wMissile * mMissile *
+        Math.min(6, 1 + Math.floor(missileLv / 4))) / SYSTEM.missileCd
     : 0;
-  const flakDps = (U.flak.add * lv('flak') * dmgMult * wFlak) / SYSTEM.flakCd;
+  const flakDps = (U.flak.add * lv('flak') * dmgMult * wFlak * mFlak *
+    [1, 2, 3, 5][masteryTier(lv('flak'))]) / SYSTEM.flakCd;
   // Arc hits several targets; count two for single-target-equivalent purposes.
-  const arcDps = (U.arc.add * lv('arc') * dmgMult * wArc * 2) / SYSTEM.arcCd;
+  const arcDps = (U.arc.add * lv('arc') * dmgMult * wArc * mArc * 2) / SYSTEM.arcCd;
   const dps = mainDps + wingDps + laserDps + missileDps + flakDps + arcDps;
 
   return {
@@ -508,13 +644,20 @@ export function deriveStats(up, lab, prestigeCount) {
     armor:       Math.min(U.armor.cap, U.armor.add * lv('armor')),
     thorns:      U.thorns.add * lv('thorns'),
     // --- weapon systems -------------------------------------------------
-    laserDps:     U.laser.add * lv('laser') * dmgMult * wLaser,
-    missileDmg:   lv('missiles') ? (150 + U.missiles.add * lv('missiles')) * dmgMult * wMissile : 0,
-    missileCount: Math.min(5, 1 + Math.floor(lv('missiles') / 4)),
-    flakDmg:      U.flak.add * lv('flak') * dmgMult * wFlak,
-    flakRadius:   (72 + lv('flak') * 2.4) * Math.pow(wFlak, 0.35),
-    arcDmg:       U.arc.add * lv('arc') * dmgMult * wArc,
-    arcJumps:     Math.min(10, 2 + Math.floor(lv('arc') / 4) + Math.floor((lab.labArc || 0) / 3)),
+    laserDps:     U.laser.add * lv('laser') * dmgMult * wLaser * mLaser,
+    laserTier:    masteryTier(lv('laser')),
+    laserPierce:  [1, 2, 4, 8][masteryTier(lv('laser'))],
+    missileDmg:   lv('missiles') ? (150 + U.missiles.add * lv('missiles')) * dmgMult * wMissile * mMissile : 0,
+    missileCount: Math.min(6, 1 + Math.floor(lv('missiles') / 4)),
+    missileTier:  masteryTier(lv('missiles')),
+    flakDmg:      U.flak.add * lv('flak') * dmgMult * wFlak * mFlak,
+    flakRadius:   (72 + lv('flak') * 2.4) * Math.pow(wFlak, 0.35) * (1 + masteryTier(lv('flak')) * 0.12),
+    flakTier:     masteryTier(lv('flak')),
+    flakBursts:   [1, 2, 3, 5][masteryTier(lv('flak'))],
+    arcDmg:       U.arc.add * lv('arc') * dmgMult * wArc * mArc,
+    arcJumps:     Math.min(12, 2 + Math.floor(lv('arc') / 4) + Math.floor((lab.labArc || 0) / 3)),
+    arcTier:      masteryTier(lv('arc')),
+    arcForks:     masteryTier(lv('arc')) >= 2 ? 2 : 1,
     wingRate:     SYSTEM.wingFraction * wWing,
 
     coinMult:    coinMult * (1 + U.coinBonus.add * lv('coinBonus')),

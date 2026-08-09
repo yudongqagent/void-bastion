@@ -9,8 +9,9 @@
 import {
   UPGRADES, LAB, ABILITIES, upgradeCost, upgradeBulkCost, affordableLevels,
   upgradeMaxLevel, labCost, labMult, coresForRun, startingWave, deriveStats,
-  speedOptions, fmt, isBossWave,
+  speedOptions, fmt, isBossWave, masteryLabel, masteryTier, MASTERY,
 } from '../game/balance.js';
+import { levelOf, phaseOf, PHASES_PER_LEVEL, STEPS_PER_LEVEL } from '../game/levels.js';
 
 const ABILITY_GLYPH = {
   overdrive: '▶▶', nova: '◎', aegis: '✦',
@@ -70,7 +71,7 @@ export class UI {
     for (const id of ['waveNum', 'coinNum', 'coreNum', 'bossTag', 'upgradeList', 'drawer',
       'abilities', 'modalRoot', 'toasts',
       'speedBtn', 'soundBtn', 'labList', 'abilityShop', 'labCores', 'menuStats',
-      'zoneName']) {
+      'zoneName', 'phaseDots']) {
       this[id] = this.$(id);
     }
   }
@@ -186,6 +187,7 @@ export class UI {
           </div>
           <div class="up-desc">${u.desc}</div>
           <div class="up-val"></div>
+          <div class="up-mastery"></div>
         </div>
         <div class="up-buy">
           <span class="up-cost">0</span>
@@ -198,6 +200,7 @@ export class UI {
         val: el.querySelector('.up-val'),
         cost: el.querySelector('.up-cost'),
         qty: el.querySelector('.up-qty'),
+        mastery: el.querySelector('.up-mastery'),
       });
     }
     this.upgradeList.replaceChildren(frag);
@@ -256,6 +259,22 @@ export class UI {
           `<span class="v-arrow">→</span>` +
           `<span class="v-next">${this.previewStat(key, plan.n)}</span>`;
       }
+      // Weapon systems earn qualitative upgrades at set levels; showing the
+      // current behaviour and the next threshold is what makes going deep on
+      // one system a decision rather than a guess.
+      if (r.mastery) {
+        const m = masteryLabel(key, lvl);
+        if (m) {
+          const next = MASTERY[m.tier + 1];
+          r.mastery.innerHTML =
+            `<b>T${m.tier}</b> ${m.text}` +
+            (next ? `<em> · T${m.tier + 1} at Lv ${next.at}</em>` : '');
+          r.mastery.hidden = false;
+        } else {
+          r.mastery.hidden = true;
+        }
+      }
+
       if (maxed) {
         r.cost.textContent = '—';
         r.qty.textContent = '';
@@ -444,7 +463,15 @@ export class UI {
     const { run, meta } = this.state;
     const s = this.game.stats;
 
-    this.waveNum.textContent = run.wave;
+    // The player counts levels; `run.wave` survives underneath as the
+    // difficulty index every balance formula is tuned against.
+    const level = levelOf(run.wave);
+    const phase = phaseOf(run.wave);
+    if (this._level !== level || this._phase !== phase) {
+      this._level = level; this._phase = phase;
+      this.waveNum.textContent = level;
+      this.renderPhaseDots(phase);
+    }
     this.bossTag.hidden = !isBossWave(run.wave);
     this.coinNum.textContent = fmt(run.coins);
     this.coreNum.textContent = fmt(meta.cores);
@@ -454,7 +481,33 @@ export class UI {
   }
 
 
-  /** Name of the zone the ship is flying through, shown next to the wave. */
+  /** Four phase pips plus a wider boss pip, filled as the level progresses. */
+  renderPhaseDots(phase) {
+    if (!this.phaseDots) return;
+    let html = '';
+    for (let i = 1; i <= STEPS_PER_LEVEL; i++) {
+      const boss = i === STEPS_PER_LEVEL;
+      const cls = (i < phase ? 'done' : i === phase ? 'done' : '') + (boss ? ' boss' : '');
+      html += `<i class="${cls.trim()}"></i>`;
+    }
+    this.phaseDots.innerHTML = html;
+  }
+
+  /** Announce a new level: where you are, what is waiting, what changed. */
+  showLevelCard(d) {
+    const el = document.createElement('div');
+    el.className = 'level-card';
+    el.innerHTML =
+      `<div class="lc-lvl">LEVEL ${d.level}</div>` +
+      `<div class="lc-name">${d.name}</div>` +
+      `<div class="lc-boss">${d.boss}</div>` +
+      `<div class="lc-tell">${d.tell}</div>` +
+      (d.refit ? `<div class="lc-refit">${d.refit}</div>` : '');
+    this.toasts.appendChild(el);
+    setTimeout(() => el.remove(), 3600);
+  }
+
+  /** Name of the zone the ship is flying through, shown next to the level. */
   setZone(sector) {
     if (this.zoneName) this.zoneName.textContent = sector.name;
   }

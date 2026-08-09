@@ -26,6 +26,10 @@ import {
   GROUND_TYPES, hullFor,
 } from './balance.js';
 import { sectorForWave, sectorNumber, isSectorStart } from './sectors.js';
+import {
+  levelOf, phaseOf, isBossStep, firstStepOfLevel, bossForLevel, sectorForLevel,
+  bossName, levelName, levelUpgrade, PHASES_PER_LEVEL,
+} from './levels.js';
 import { Terrain, groundFor } from './terrain.js';
 
 const TAU = Math.PI * 2;
@@ -112,13 +116,13 @@ const newEnemy = () => ({
   fireT: 0, phase: false, phaseT: 0, distScale: 1, stun: 0,
   behavior: 'dive', t: 0, homeX: 0, amp: 0, freq: 0, holdY: 0, face: 0,
   ground: false, hull: null, accent: null, smokeT: 0,
-  weapon: null, wcd: 0, elite: false, burst: 0, burstT: 0, spin2: 0,
+  weapon: null, wcd: 0, elite: false, burst: 0, burstT: 0, spin2: 0, bossDef: null,
 });
 
 const newBullet = () => ({
   active: false, x: 0, y: 0, vx: 0, vy: 0, dmg: 0, pierce: 1, life: 0,
   crit: false, radius: 3, hits: null, fromEnemy: false,
-  homing: 0, drag: 0, minSpeed: 0, missile: false, system: null,
+  homing: 0, drag: 0, minSpeed: 0, missile: false, system: null, split: 0,
 });
 
 const newParticle = () => ({
@@ -194,6 +198,7 @@ export class Game {
     this.shells = [];
     this.sysT = { missile: 1.2, flak: 2.0, arc: 0.9 };
     this.laserTick = 0;
+    this.laserChain = [];
     this.warnT = 0;
 
     this.sector = sectorForWave(1, BOSS_INTERVAL);
@@ -337,13 +342,13 @@ export class Game {
   // --- zones ----------------------------------------------------------------
 
   enterSector(wave) {
-    const next = sectorForWave(wave, BOSS_INTERVAL);
+    const next = sectorForLevel(levelOf(wave));
     const changed = next.id !== this.sector.id;
     this.sector = next;
     this.storm = null;
     this.stormTimer = 3 + Math.random() * 4;
     if (changed || wave <= 1) {
-      this.emit('sector', { sector: next, index: sectorNumber(wave, BOSS_INTERVAL) + 1 });
+      this.emit('sector', { sector: next, index: levelOf(wave) });
       this.flash(next.haze.map((c) => c * 0.22), 0.55);
     }
   }
@@ -391,12 +396,18 @@ export class Game {
 
   startWave() {
     const wave = this.state.run.wave;
-    // Self-healing rather than only on a block boundary: a run resumed from a
-    // save starts mid-block, and keying purely off isSectorStart left it flying
+    const level = levelOf(wave);
+    // Self-healing rather than only on a boundary: a run resumed from a save
+    // starts mid-level, and keying purely off the boundary left it flying
     // through the Asteroid Belt with Outer Reach's palette and no debris.
-    if (this.sector.id !== sectorForWave(wave, BOSS_INTERVAL).id ||
-        isSectorStart(wave, BOSS_INTERVAL)) {
+    if (this.sector.id !== sectorForLevel(level).id || firstStepOfLevel(wave)) {
       this.enterSector(wave);
+    }
+    if (firstStepOfLevel(wave)) {
+      this.emit('levelStart', {
+        level, name: levelName(level), boss: bossName(level),
+        tell: bossForLevel(level).tell, refit: levelUpgrade(level).label,
+      });
     }
     const sec = this.sector;
 
@@ -408,6 +419,7 @@ export class Game {
     const baseSpd = enemySpeed(wave);
     const baseCoin = coinValue(wave) / SWARM_DENSITY;
 
+    const refit = levelUpgrade(levelOf(wave));
     const eliteRate = eliteChance(wave);
     this.spawnQueue.length = 0;
     for (let i = 0; i < count; i++) {
@@ -419,9 +431,9 @@ export class Game {
       this.spawnQueue.push({
         type: pick.key,
         elite,
-        hp: baseHP * a.hp * (sec.hpMult || 1) * (E ? E.hp : 1),
+        hp: baseHP * a.hp * (sec.hpMult || 1) * (E ? E.hp : 1) * refit.hp,
         speed: baseSpd * a.speed * (sec.speedMult || 1) * (E ? E.speed : 1),
-        dmg: baseDmg * a.dmg * (E ? E.dmg : 1),
+        dmg: baseDmg * a.dmg * (E ? E.dmg : 1) * refit.dmg,
         coin: baseCoin * a.coin * (sec.coinMult || 1) * (E ? E.coin : 1),
         radius: a.radius * (E ? E.radius : 1), sides: a.sides,
         shield: a.shield ? baseHP * a.shield * 0.5 * (E ? E.hp : 1) : 0,
@@ -434,13 +446,16 @@ export class Game {
     }
     if (isBossWave(wave)) {
       const b = bossStats(wave);
+      const def = bossForLevel(levelOf(wave));
       this.spawnQueue.push({
-        type: 'boss', hp: b.hp * (sec.hpMult || 1), speed: b.speed * (sec.speedMult || 1),
-        dmg: b.damage, coin: b.coins * (sec.coinMult || 1),
-        radius: b.radius, sides: 8, shield: 0, boss: true, splits: 0,
+        type: 'boss', hp: b.hp * (sec.hpMult || 1) * def.hp * refit.hp,
+        speed: b.speed * (sec.speedMult || 1),
+        dmg: b.damage * refit.dmg, coin: b.coins * (sec.coinMult || 1),
+        radius: def.radius, sides: 8, shield: 0, boss: true, splits: 0,
+        bossDef: def,
       });
       this.synth.boss();
-      this.emit('boss', { wave });
+      this.emit('boss', { wave, name: bossName(levelOf(wave)), tell: def.tell });
     }
 
     // Enemies arrive in formations rather than one at a time — a wall of six
@@ -525,6 +540,7 @@ export class Game {
     e.hull = hp.hull;
     e.accent = hp.accent;
     e.elite = !!def.elite;
+    e.bossDef = def.bossDef || null;
     e.weapon = def.weapon || null;
     e.wcd = 0.6 + Math.random() * 1.4;
     e.burst = 0; e.burstT = 0; e.spin2 = Math.random() * TAU;
@@ -983,7 +999,7 @@ export class Game {
   damageShip(amount, source) {
     const { run } = this.state;
     if (this.buffs.aegis > 0) { this.synth.shieldHit(); return; }
-    if ((run.iframe || 0) > 0) return;
+    if ((run.iframe || 0) > 0 || (run.spawnGuard || 0) > 0) return;
     const s = this.stats;
     let dmg = amount * (1 - s.armor);
 
@@ -1343,7 +1359,8 @@ export class Game {
               0.18, 2 + Math.random() * 2, e.color, 0.9, 1);
           }
           if (b.missile) {
-            this.spawnExplosion(b.x, b.y, 13, [1.5, 0.85, 0.35], false);
+            this.spawnExplosion(b.x, b.y, 13, COLORS.missile, false);
+            if (b.split > 0) this.splitWarhead(b);
             b.active = false;
             break;
           }
@@ -1437,24 +1454,8 @@ export class Game {
           break;
         }
         case 'boss': {
-          if (e.y < e.holdY) e.y += speed * dt;
-          else {
-            e.x = this.cx + Math.sin(e.t * 0.55) * this.fieldW * 0.3;
-            e.fireT -= dt;
-            if (e.fireT <= 0) {
-              e.fireT = 1.35;
-              // Alternating fan and spiral, so a boss is a pattern to read
-              // rather than one thing to stand beside.
-              e.spin2 += 0.5;
-              const spiral = Math.floor(e.t / 4) % 2 === 1;
-              for (let k = 0; k < 7; k++) {
-                const ang = spiral
-                  ? e.spin2 + (k / 7) * TAU
-                  : Math.PI / 2 + (k - 3) * 0.22;
-                this.enemyShot(e, ang, { speed: 240, dmg: 0.30, life: 7 });
-              }
-            }
-          }
+          if (e.y < e.holdY) { e.y += speed * dt; e.face = 0; break; }
+          this.runBossPattern(e, dt);
           e.face = 0;
           break;
         }
@@ -1588,7 +1589,30 @@ export class Game {
     }
     this.laserTarget = t || null;
     if (!t) return;
-    this.damageEnemy(t, s.laserDps * dt, false, false);
+
+    // Mastery lets the beam cut through to targets behind the first, which is
+    // the visible payoff for committing to it: a deep laser build carves a line
+    // through a formation instead of drilling one craft at a time.
+    this.laserChain.length = 0;
+    this.laserChain.push(t);
+    if (s.laserPierce > 1) {
+      const dx = t.x - this.ship.x, dy = t.y - this.ship.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len;
+      for (const e of this.enemies.items) {
+        if (!e.active || e === t) continue;
+        const ex = e.x - this.ship.x, ey = e.y - this.ship.y;
+        const along = ex * ux + ey * uy;
+        if (along < len) continue;                       // behind the primary
+        const perp = Math.abs(ex * uy - ey * ux);
+        if (perp > e.radius + 9) continue;               // not on the line
+        this.laserChain.push(e);
+        if (this.laserChain.length >= s.laserPierce) break;
+      }
+    }
+    for (const hit of this.laserChain) {
+      this.damageEnemy(hit, s.laserDps * dt, false, false);
+    }
     this.laserTick -= dt;
     if (this.laserTick <= 0) {
       this.laserTick = 0.45;
@@ -1631,6 +1655,7 @@ export class Game {
       b.homing = 2.6;
       b.drag = 0;
       b.missile = true;
+      b.split = s.missileTier;
       b.hits = b.hits || new Set();
       b.hits.clear();
       // Launch puff, so a salvo announces itself.
@@ -1665,13 +1690,159 @@ export class Game {
 
     // Lob a visible shell that travels to the target, then bursts. Detonating
     // instantly at a distant point read as a random flash with no cause.
-    this.shells.push({
-      x: this.ship.x, y: this.ship.y - 10,
-      x0: this.ship.x, y0: this.ship.y - 10,
-      tx: best.x, ty: best.y,
-      t: 0, dur: 0.34, dmg: s.flakDmg, radius: s.flakRadius,
-    });
+    // A mastered battery walks a barrage across the formation rather than
+    // dropping a single shell on it.
+    const shots = s.flakBursts || 1;
+    for (let i = 0; i < shots; i++) {
+      const spread = shots > 1 ? (i - (shots - 1) / 2) * s.flakRadius * 0.85 : 0;
+      this.shells.push({
+        x: this.ship.x, y: this.ship.y - 10,
+        x0: this.ship.x, y0: this.ship.y - 10,
+        tx: best.x + spread, ty: best.y + (Math.random() - 0.5) * 30,
+        t: -i * 0.09, dur: 0.34, dmg: s.flakDmg, radius: s.flakRadius,
+      });
+    }
     this.synth.shot(0.45);
+  }
+
+  /**
+   * Boss behaviour, one routine per roster entry.
+   *
+   * The point of separate patterns is that each level's boss should demand a
+   * different answer: a spiral wants you circling, a sweep wants you slipping
+   * through gaps, a carrier wants you killing escorts first. Without that, every
+   * boss is the same fight wearing a different hull.
+   */
+  runBossPattern(e, dt) {
+    const def = e.bossDef;
+    const pattern = def ? def.pattern : 'spiral';
+    const ship = this.ship;
+    e.fireT -= dt;
+
+    switch (pattern) {
+      case 'sweep': {
+        // Paces the lane and fires fans across its own heading.
+        e.x = this.cx + Math.sin(e.t * 0.75) * this.fieldW * 0.34;
+        if (e.fireT <= 0) {
+          e.fireT = 1.5;
+          const lean = Math.cos(e.t * 0.75) * 0.32;
+          for (let k = -3; k <= 3; k++) {
+            this.enemyShot(e, Math.PI / 2 + lean + k * 0.17, { speed: 250, dmg: 0.30, life: 7 });
+          }
+        }
+        break;
+      }
+      case 'launch': {
+        // Sends escorts, then covering missiles. Kill the flights or drown.
+        e.x = this.cx + Math.sin(e.t * 0.4) * this.fieldW * 0.26;
+        if (e.fireT <= 0) {
+          e.fireT = 2.6;
+          if (Math.floor(e.t / 2.6) % 2 === 0) {
+            for (let k = -1; k <= 1; k++) this.spawnEscort(e, k * 44, 'darter', 0.035, 'swarm');
+            this.synth.ability();
+          } else {
+            for (let k = -1; k <= 1; k++) {
+              const b = this.enemyShot(e, Math.PI / 2 + k * 0.3, { speed: 150, dmg: 0.55, life: 8 });
+              b.homing = 1.5;
+            }
+          }
+        }
+        break;
+      }
+      case 'lance': {
+        // Charges rail columns. They telegraph, so the lane stays readable.
+        e.x = this.cx + Math.sin(e.t * 0.5) * this.fieldW * 0.3;
+        if (e.fireT <= 0) {
+          e.fireT = 3.4;
+          for (const off of [-1, 1]) {
+            this.beams.push({ x: e.x + off * 62, y: e.y, t: 0, dmg: e.dmg * 0.5, owner: null, w: 30 });
+          }
+        }
+        break;
+      }
+      case 'swarm': {
+        // Spits splitters that multiply if ignored.
+        e.x = this.cx + Math.sin(e.t * 0.6) * this.fieldW * 0.28;
+        if (e.fireT <= 0) {
+          e.fireT = 2.2;
+          for (let k = -1; k <= 1; k += 2) this.spawnEscort(e, k * 30, 'splitter', 0.05, 'weave');
+        }
+        break;
+      }
+      case 'burst': {
+        // Nearly stationary; expanding rings you have to be outside of.
+        e.x = this.cx + Math.sin(e.t * 0.18) * this.fieldW * 0.1;
+        if (e.fireT <= 0) {
+          e.fireT = 2.4;
+          e.spin2 += 0.28;
+          for (let k = 0; k < 14; k++) {
+            this.enemyShot(e, e.spin2 + (k / 14) * TAU, { speed: 190, dmg: 0.26, life: 9 });
+          }
+          this.spawnRing(e.x, e.y, 130, def ? def.accent : [1.4, 0.5, 1.4], 0.5);
+        }
+        break;
+      }
+      default: {
+        // 'spiral' — rotating batteries, plus aimed shells to punish camping.
+        e.x = this.cx + Math.sin(e.t * 0.3) * this.fieldW * 0.2;
+        if (e.fireT <= 0) {
+          e.fireT = 1.15;
+          e.spin2 += 0.42;
+          for (let k = 0; k < 6; k++) {
+            this.enemyShot(e, e.spin2 + (k / 6) * TAU, { speed: 215, dmg: 0.26, life: 8 });
+          }
+          if (Math.floor(e.t) % 3 === 0) {
+            this.enemyShot(e, Math.atan2(ship.y - e.y, ship.x - e.x),
+              { speed: 320, dmg: 0.42, life: 6 });
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  /** A boss-launched minion. Cheap in HP and payout; it is pressure, not loot. */
+  spawnEscort(boss, dx, type, hpShare, behavior) {
+    const h = hullFor(type);
+    const e = this.enemies.obtain();
+    Object.assign(e, {
+      active: true, x: boss.x + dx, y: boss.y + 20,
+      hp: boss.maxHp * hpShare, maxHp: boss.maxHp * hpShare,
+      speed: enemySpeed(this.state.run.wave) * (behavior === 'swarm' ? 1.2 : 0.85),
+      dmg: boss.dmg * 0.2, coin: boss.coin * 0.02,
+      radius: type === 'splitter' ? 13 : 10, sides: type === 'splitter' ? 5 : 3,
+      type, hull: h.hull, accent: h.accent, color: h.hull,
+      behavior, boss: false, elite: false, ground: false, bossDef: null,
+      weapon: null, wcd: 0, shield: 0, maxShield: 0, phase: false, phaseT: 0,
+      splits: type === 'splitter' ? 1 : 0, hitFlash: 0, stun: 0, t: 0, face: 0,
+      distScale: 1, smokeT: 0, spin2: 0, homeX: boss.x, amp: 45, freq: 1,
+    });
+    return e;
+  }
+
+  /** Cluster munitions: a mastered warhead scatters live submunitions. */
+  splitWarhead(b) {
+    const n = 2 + b.split;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * TAU + Math.random();
+      const sub = this.bullets.obtain();
+      sub.active = true;
+      sub.x = b.x; sub.y = b.y;
+      sub.vx = Math.cos(a) * 220;
+      sub.vy = Math.sin(a) * 220;
+      sub.dmg = b.dmg * 0.42;
+      sub.crit = false;
+      sub.pierce = 1;
+      sub.life = 1.3;
+      sub.radius = 4;
+      sub.fromEnemy = false;
+      sub.system = 'missile';
+      sub.homing = 2.2;
+      sub.missile = true;
+      sub.split = 0;
+      sub.hits = sub.hits || new Set();
+      sub.hits.clear();
+    }
   }
 
   /** Flak shells in flight, and their airbursts. */
@@ -1679,6 +1850,7 @@ export class Game {
     for (let i = this.shells.length - 1; i >= 0; i--) {
       const sh = this.shells[i];
       sh.t += dt;
+      if (sh.t < 0) continue;            // staggered launch
       const k = Math.min(1, sh.t / sh.dur);
       sh.x = sh.x0 + (sh.tx - sh.x0) * k;
       sh.y = sh.y0 + (sh.ty - sh.y0) * k;
@@ -1761,6 +1933,41 @@ export class Game {
       this.arcs.push({ points, t: 0.22, max: 0.22 });
       this.synth.shieldHit();
     }
+
+    // A forked coil runs a second, independent chain — the reason a deep arc
+    // build clears a screen instead of a line.
+    if (s.arcForks > 1) {
+      const alt = [{ x: this.ship.x, y: this.ship.y - 10 }];
+      let from2 = null;
+      for (const e of live) {
+        if (used.has(e)) continue;
+        from2 = e; break;
+      }
+      if (from2) {
+        used.add(from2);
+        this.damageEnemy(from2, s.arcDmg * 0.8, false, false);
+        alt.push({ x: from2.x, y: from2.y });
+        for (let j = 1; j < s.arcJumps; j++) {
+          let best2 = null, bd = 190;
+          for (const e of live) {
+            if (used.has(e) || !e.active) continue;
+            const d = Math.hypot(e.x - from2.x, e.y - from2.y);
+            if (d < bd) { bd = d; best2 = e; }
+          }
+          if (!best2) break;
+          used.add(best2);
+          this.damageEnemy(best2, s.arcDmg * 0.8, false, false);
+          alt.push({ x: best2.x, y: best2.y });
+          from2 = best2;
+        }
+        if (alt.length > 1) this.arcs.push({ points: alt, t: 0.22, max: 0.22 });
+      }
+    }
+
+    // Mastered coils leave targets stunned.
+    if (s.arcTier >= 1) {
+      for (const e of used) if (e.active && !e.boss) e.stun = Math.max(e.stun, 0.35);
+    }
   }
 
   updatePickups(dt) {
@@ -1842,6 +2049,10 @@ export class Game {
     const { run } = this.state;
     const s = this.stats;
     if (run.iframe > 0) run.iframe = Math.max(0, run.iframe - dt);
+    // Spawn protection. Forward Deploy drops the ship into a live level, and
+    // without a moment to settle a bad opening ends the run before the player
+    // has seen it.
+    if (run.spawnGuard > 0) run.spawnGuard = Math.max(0, run.spawnGuard - dt);
 
     // Low-hull warning: an accelerating pulse and tone, so a run never simply
     // stops without the player having seen it coming.
@@ -2181,7 +2392,7 @@ export class Game {
     const R = this.renderer;
     for (const e of this.enemies.items) {
       if (!e.active) continue;
-      let [r, g, b] = e.color;
+      let [r, g, b] = e.boss && e.bossDef ? e.bossDef.accent : e.color;
       let alpha = 1;
 
       if (e.phase) alpha = Math.sin(e.phaseT) > 0.55 ? 0.22 : 0.85;
@@ -2239,10 +2450,14 @@ export class Game {
     const s = this.stats;
 
     if (s.laserDps > 0 && this.laserTarget && this.laserTarget.active) {
-      const t = this.laserTarget;
+      const t = this.laserChain.length ? this.laserChain[this.laserChain.length - 1] : this.laserTarget;
       const wob = Math.sin(time * 40) * 1.1;
-      R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, 3.4 + wob * 0.5, 0.35, 1.25, 1.7, 0.42, 0.85);
-      R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, 1.3, 1.5, 1.85, 2.0, 0.9, 0.5);
+      const wide = 3.4 + s.laserTier * 1.5;
+      R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, wide + wob * 0.5, 0.35, 1.25, 1.7, 0.42, 0.85);
+      R.beam(this.ship.x, this.ship.y - 12, t.x, t.y, 1.3 + s.laserTier * 0.5, 1.5, 1.85, 2.0, 0.9, 0.5);
+      for (const hit of this.laserChain) {
+        R.glow(hit.x, hit.y, 18, 0.5, 1.4, 1.8, 0.5, 1.7);
+      }
       R.glow(t.x, t.y, 26 + wob * 2, 0.5, 1.4, 1.8, 0.6, 1.6);
       R.ring(t.x, t.y, t.radius + 6 + Math.sin(time * 18) * 2, 1.5,
         0.6, 1.5, 1.9, 0.7);
@@ -2393,6 +2608,12 @@ export class Game {
     const c = over ? [1.5, 0.9, 0.25] : COLORS.ship;
     const bank = ship.bank;
 
+    if ((run.spawnGuard || 0) > 0) {
+      const k = Math.min(1, run.spawnGuard / 2.5);
+      const p2 = 1 + Math.sin(time * 12) * 0.08;
+      R.ring(x, y, 34 * p2, 2.4, 1.2, 1.5, 1.9, 0.45 + k * 0.35);
+      R.glow(x, y, 52, 0.9, 1.3, 1.8, 0.22 * k, 2.1);
+    }
     if (shieldFrac > 0.01) {
       R.ring(x, y, 30 + Math.sin(time * 2.4) * 1.4, 2.0,
         COLORS.shield[0], COLORS.shield[1], COLORS.shield[2], 0.25 + shieldFrac * 0.45);
