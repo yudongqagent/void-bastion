@@ -103,6 +103,14 @@ let lastWave = state.run.wave;
 let waveStartTime = 0;
 const waveDurations = [];
 let peakEnemies = 0, peakBullets = 0, peakParticles = 0, peakPickups = 0;
+// Wreckage must actually spawn AND land. A pool that only ever grows means
+// pieces are leaking; one that never fires impacts means they scroll away
+// before touching down, and the terrain layer stays scenery.
+let peakWrecks = 0, wreckPoolGrowth = 0;
+const wreckStartSize = game.wrecks.items.length;
+let impacts = 0;
+const realImpact = game.wreckImpact.bind(game);
+game.wreckImpact = (w) => { impacts++; realImpact(w); };
 let totalBought = 0, revives = 0;
 let collected = 0, lastCoins = state.run.coins;
 
@@ -122,6 +130,8 @@ while (state.run.wave < TARGET_WAVES && simTime < MAX_SIM_SECONDS && !state.run.
   peakEnemies = Math.max(peakEnemies, alive);
   peakBullets = Math.max(peakBullets, game.bullets.items.filter((b) => b.active).length);
   peakParticles = Math.max(peakParticles, game.particles.items.filter((p) => p.active).length);
+  peakWrecks = Math.max(peakWrecks, game.wrecks.items.filter((w) => w.active).length);
+  wreckPoolGrowth = game.wrecks.items.length - wreckStartSize;
   peakPickups = Math.max(peakPickups, game.pickups.items.filter((p) => p.active).length);
 
   if (state.run.wave !== lastWave) {
@@ -165,6 +175,10 @@ check(state.run.coins > 0, 'no coins were ever earned');
 check(peakEnemies > 0, 'no enemy was ever spawned');
 check(peakBullets > 0, 'the bastion never fired');
 check(peakParticles > 0, 'no particles were ever emitted');
+check(peakWrecks > 0, 'no craft ever shed wreckage');
+check(impacts > 0, 'wreckage never reached a surface — nothing splashes or scorches');
+check(wreckPoolGrowth === 0,
+  `wreck pool grew by ${wreckPoolGrowth} past its ${wreckStartSize} slots — pieces are leaking`);
 check(peakPickups > 0, 'kills never dropped any loot');
 check(collected > 0, 'the ship never collected a single pickup');
 check(drawCalls > 50, `render() only issued ${drawCalls} draw calls`);
@@ -188,6 +202,8 @@ console.log(`
   peak alive enemies ... ${peakEnemies}
   peak bullets ......... ${peakBullets}
   peak particles ....... ${peakParticles}
+  peak wrecks .......... ${peakWrecks} of ${game.wrecks.items.length} slots
+  wreck impacts ........ ${impacts}
   peak pickups ......... ${peakPickups}
   coins collected ...... ${fmt(collected)}
   upgrades bought ...... ${totalBought}

@@ -157,6 +157,23 @@ export class Synth {
     });
   }
 
+  /** Wreckage hitting water: a soft, bright-then-dark noise swell. */
+  splash() {
+    this._noise({
+      peak: 0.05, attack: 0.004, decay: 0.26,
+      filter: 'bandpass', freq: 1600, freq2: 380,
+    });
+  }
+
+  /** Wreckage hitting rock: shorter, lower, harder. */
+  thud() {
+    this._noise({
+      peak: 0.055, attack: 0.001, decay: 0.16,
+      filter: 'lowpass', freq: 620, freq2: 90,
+    });
+    this._tone({ freq: 110, freq2: 48, type: 'triangle', peak: 0.05, attack: 0.002, decay: 0.14 });
+  }
+
   towerHit() {
     this._tone({ freq: 120, freq2: 44, type: 'sawtooth', peak: 0.22, attack: 0.002, decay: 0.3 });
     this._noise({ peak: 0.12, decay: 0.22, filter: 'lowpass', freq: 700, freq2: 120 });

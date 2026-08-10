@@ -141,6 +141,44 @@ export class Terrain {
     return out;
   }
 
+  /**
+   * What lies under a world point: 'water' or 'land'.
+   *
+   * Circle approximations of each feature — cheap, and only ever called when a
+   * piece of wreckage actually lands, never per frame per entity.
+   */
+  surfaceAt(x, y) {
+    for (const f of this.features) {
+      const dy = y - f.y;
+      if (dy < -f.w * 1.6 || dy > f.w * 1.6) continue;
+      switch (f.kind) {
+        case 'island':
+          for (const l of f.lobes) {
+            if (Math.hypot(x - (f.x + l.dx), y - (f.y + l.dy)) < l.r * 1.05) return 'land';
+          }
+          break;
+        case 'base':
+          if (Math.hypot(x - f.x, y - f.y) < f.w * 0.62) return 'land';
+          for (const p of f.pads) {
+            if (Math.abs(x - (f.x + p.dx)) < p.w && Math.abs(y - (f.y + p.dy)) < p.h) return 'land';
+          }
+          break;
+        case 'convoy':
+          for (const sh of f.ships) {
+            if (Math.abs(x - (f.x + sh.dx)) < sh.len * 0.3 &&
+                Math.abs(y - (f.y + sh.dy)) < sh.len) return 'land';
+          }
+          break;
+        default:
+          for (const rk of f.rocks) {
+            if (Math.hypot(x - (f.x + rk.dx), y - (f.y + rk.dy)) < rk.r) return 'land';
+          }
+          break;
+      }
+    }
+    return 'water';
+  }
+
   /** Open water: a base plane plus scrolling swell lines. */
   renderWater(R, pal, time, x0, x1, y0, y1, scroll) {
     const w = x1 - x0, h = y1 - y0;

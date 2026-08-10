@@ -41,6 +41,12 @@ const ui = new UI(game, state, synth);
 // and there is nothing here worth hiding in a single-player offline game.
 window.VB = { game, state, ui, synth, renderer };
 
+// Freezing the screen is exactly the class of effect this setting exists for.
+const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+const applyMotion = () => { game.reducedMotion = motionQuery.matches; };
+applyMotion();
+if (motionQuery.addEventListener) motionQuery.addEventListener('change', applyMotion);
+
 // --- sizing -------------------------------------------------------------------
 
 let lastW = 0, lastH = 0, lastDpr = 0;

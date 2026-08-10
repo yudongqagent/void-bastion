@@ -31,6 +31,7 @@ import {
   bossName, levelName, levelUpgrade, PHASES_PER_LEVEL,
 } from './levels.js';
 import { Terrain, groundFor } from './terrain.js';
+import { craftParts, craftBodies } from './craft.js';
 
 const TAU = Math.PI * 2;
 
@@ -39,6 +40,19 @@ const TAU = Math.PI * 2;
 // rescaled to keep time-to-contact — the thing that actually decides whether a
 // wave hurts you — the same everywhere.
 const REFERENCE_APPROACH = 430;
+
+// --- impact feel ------------------------------------------------------------
+// Hitstop: a brief global freeze on a significant kill. It is what turns a
+// state change ("that enemy is gone") into an impact ("I hit that"). Rendering
+// continues through it, so the player sees a held frame rather than a gap.
+const HITSTOP_MAX = 0.09;      // longest single freeze
+const FREEZE_BUDGET = 0.16;    // seconds of freeze allowed per real second
+const SLOWMO_DUR = 1.1;        // boss-death ramp
+const SLOWMO_MIN = 0.30;       // time scale at the bottom of the ramp
+// Above this speed multiplier the boss ramp is skipped entirely: at 4x it would
+// cost ~3 seconds of wall clock every level, which is a toll the idle player
+// never asked to pay.
+const SLOWMO_MAX_SPEED = 2;
 
 // Seconds a single wave may run before the survivors start enraging.
 const ENRAGE_AFTER = 100;
@@ -117,6 +131,7 @@ const newEnemy = () => ({
   behavior: 'dive', t: 0, homeX: 0, amp: 0, freq: 0, holdY: 0, face: 0,
   ground: false, hull: null, accent: null, smokeT: 0,
   blast: 0, aura: 0, warded: 0, pack: 1, lastX: null,
+  kx: 0, ky: 0, hitFlashMax: 0.12, hitPower: 0,
   weapon: null, wcd: 0, elite: false, burst: 0, burstT: 0, spin2: 0, bossDef: null,
 });
 
@@ -136,6 +151,12 @@ const newPickup = () => ({
   life: 0, spin: 0, angle: 0, drawn: false,
 });
 
+const newWreck = () => ({
+  active: false, x: 0, y: 0, vx: 0, vy: 0, angle: 0, spin: 0,
+  alt: 1, life: 0, maxLife: 1, shape: 'slab', hw: 0, hh: 0, r0: 0, sides: 4,
+  rot: 0, r: 1, g: 1, b: 1, burn: 0, smoke: 0,
+});
+
 const newDebris = () => ({
   active: false, x: 0, y: 0, vy: 0, r: 0, angle: 0, spin: 0, sides: 6,
   hp: 0, maxHp: 0, flash: 0,
@@ -152,6 +173,7 @@ export class Game {
     this.particles = fastPool(newParticle, 1800);
     this.pickups = fastPool(newPickup, 320);
     this.debris = fastPool(newDebris, 40);
+    this.wrecks = fastPool(newWreck, 200);
 
     this.floaters = [];
     this.events = [];
@@ -179,6 +201,8 @@ export class Game {
 
     this.terrain = new Terrain();
     this.scroll = 0;
+    this.scrollDelta = 0;
+    this.fxSeed = 0x9e3779b9;
     this.scrollSpeed = 150;
     this.layers = [];
     this.nebulae = [];
@@ -188,6 +212,11 @@ export class Game {
     this.flashColor = [0, 0, 0];
     this.timeScale = 1;
     this.paused = false;
+    this.freeze = 0;               // hitstop remaining, in REAL seconds
+    this.freezeBudget = FREEZE_BUDGET;
+    this.slowmo = 0;
+    this.reducedMotion = false;
+    this._knocks = 0;
 
     this.buffs = {};
     this.singularity = null;
@@ -318,6 +347,8 @@ export class Game {
     const sec = this.sector;
     const base = this.scrollSpeed * (sec.scrollMult || 1);
     this.scroll += base * dt;
+    // Published so falling wreckage drifts with the terrain it will land on.
+    this.scrollDelta = base * dt;
 
     for (const layer of this.layers) {
       const v = base * layer.depth;
@@ -564,6 +595,7 @@ export class Game {
     e.blast = def.blast || 0;
     e.aura = def.aura || 0;
     e.warded = 0;
+    e.kx = 0; e.ky = 0; e.hitPower = 0; e.hitFlashMax = 0.12;
     e.bossDef = def.bossDef || null;
     e.weapon = def.weapon || null;
     e.wcd = 0.6 + Math.random() * 1.4;
@@ -968,7 +1000,17 @@ export class Game {
     }
   }
 
-  damageEnemy(e, amount, crit, showNumber = true) {
+  /**
+   * @param {?number[]} dir Unit direction the hit travelled in, for knockback.
+   *   Beams and area weapons pass nothing and produce no shove, which is
+   *   correct — a laser should not push a hull around.
+   *
+   * Every response here scales with the FRACTION of the target's hull removed,
+   * not the raw number. That is the only channel through which a damage upgrade
+   * is perceivable: without it, Plasma Yield going 3.26K to 3.34K changes a
+   * figure on a card and nothing whatsoever on screen.
+   */
+  damageEnemy(e, amount, crit, showNumber = true, dir = null) {
     if (e.warded) amount *= 0.42;
     if (e.shield > 0) {
       const absorbed = Math.min(e.shield, amount);
@@ -977,10 +1019,31 @@ export class Game {
       if (absorbed > 0) this.synth.shieldHit();
     }
     e.hp -= amount;
-    e.hitFlash = 0.12;
-    if (showNumber && amount >= 1 && Math.random() < 0.12) {
+
+    const frac = Math.max(0, Math.min(1, amount / (e.maxHp || 1)));
+    e.hitFlash = Math.max(e.hitFlash, 0.08 + 0.14 * frac);
+    e.hitFlashMax = e.hitFlash;
+    e.hitPower = Math.max(e.hitPower || 0, frac);
+
+    if (dir && this._knocks < 6) {
+      // Bolted-down things shudder; they do not slide.
+      const solid = e.boss || e.ground ? 0.15 : 1;
+      const shove = Math.min(9, 62 * frac) * solid;
+      if (shove > 0.4) {
+        // A DRAWING offset, deliberately not a change to e.x/e.y. Moving the
+        // real position shoves enemies up-lane, which stretches waves past the
+        // enrage timer and cost ~15% of run depth in the A/B. The player cannot
+        // tell the difference; the simulation very much can.
+        e.kx += dir[0] * shove;
+        e.ky += dir[1] * shove;
+        this._knocks++;
+      }
+    }
+    if (frac > 0.25) this.shake(2 + 6 * frac);
+
+    if (showNumber && amount >= 1 && (frac > 0.06 || Math.random() < 0.06)) {
       this.addFloater(e.x, e.y - e.radius, fmtShort(amount),
-        crit ? [1.6, 1.2, 0.4] : [1, 1, 1], crit ? 1.1 : 0.8);
+        crit ? [1.6, 1.2, 0.4] : [1, 1, 1], crit ? 1.1 + frac : 0.8 + frac * 0.5);
     }
     if (e.hp <= 0) this.killEnemy(e);
   }
@@ -992,11 +1055,23 @@ export class Game {
     meta.totalKills++;
 
     this.spawnExplosion(e.x, e.y, e.radius, e.color, e.boss || e.blast > 0);
+    this.spawnWreckage(e);
     this.synth.kill(e.boss || e.blast > 0);
+
+    if (e.boss) {
+      // A freeze on a boss is a hiccup; a ramp is a victory lap. Skipped when
+      // the player is running the clock fast, where it would only cost them.
+      if (this.timeScale <= SLOWMO_MAX_SPEED && !this.reducedMotion) {
+        this.slowmo = SLOWMO_DUR;
+      }
+    } else {
+      this.addHitstop((0.018 + 0.055 * this.killWeight(e)) * (e.elite ? 1.5 : 1));
+    }
 
     // A bomber is a trap as much as a target: shoot it early or eat the blast.
     if (e.blast > 0) {
       this.spawnRing(e.x, e.y, e.blast, [1.6, 0.5, 0.15], 0.42);
+      this.addHitstop(0.05);
       const d = Math.hypot(this.ship.x - e.x, this.ship.y - e.y);
       if (d < e.blast + this.ship.radius) {
         const falloff = 1 - d / (e.blast + this.ship.radius);
@@ -1082,6 +1157,7 @@ export class Game {
       dmg = cap;
       run.iframe = TUNING.IFRAME_SECONDS;
       this.shake(9);
+      this.addHitstop(0.07);
     }
 
     if (run.shield > 0) {
@@ -1157,6 +1233,24 @@ export class Game {
 
   // --- feedback ------------------------------------------------------------------
 
+  /**
+   * Randomness for cosmetics only.
+   *
+   * Wreckage, sparks and smoke draw from here rather than Math.random so that
+   * visual work cannot perturb the gameplay stream. Without this, adding an
+   * effect re-samples every subsequent gameplay roll and shifts measured run
+   * depth by several levels — which looks exactly like a balance regression and
+   * is impossible to A/B against.
+   */
+  fxRandom() {
+    let x = this.fxSeed;
+    x ^= x << 13; x >>>= 0;
+    x ^= x >> 17;
+    x ^= x << 5;  x >>>= 0;
+    this.fxSeed = x;
+    return x / 4294967296;
+  }
+
   shake(amount) { this.shakeAmount = Math.min(46, this.shakeAmount + amount); }
 
   flash(color, amount) {
@@ -1183,33 +1277,165 @@ export class Game {
   spawnMuzzle() {
     const { x, y } = this.ship;
     for (let i = 0; i < 2; i++) {
-      const a = -Math.PI / 2 + (Math.random() - 0.5) * 0.8;
-      const sp = 90 + Math.random() * 150;
+      const a = -Math.PI / 2 + (this.fxRandom() - 0.5) * 0.8;
+      const sp = 90 + this.fxRandom() * 150;
       this.spawnParticle(x, y - 14, Math.cos(a) * sp, Math.sin(a) * sp,
-        0.14, 3 + Math.random() * 2.5, COLORS.bullet, 0.88, 1);
+        0.14, 3 + this.fxRandom() * 2.5, COLORS.bullet, 0.88, 1);
     }
   }
 
   spawnThrust(dt) {
     const ship = this.ship;
-    if (Math.random() > dt * 70) return;
+    if (this.fxRandom() > dt * 70) return;
     this.spawnParticle(
-      ship.x - ship.bank * 8 + (Math.random() - 0.5) * 6, ship.y + 15,
-      -ship.vx * 0.2 + (Math.random() - 0.5) * 30,
-      130 + Math.random() * 90,
-      0.28, 3.5 + Math.random() * 2.5, COLORS.ship, 0.9, 1);
+      ship.x - ship.bank * 8 + (this.fxRandom() - 0.5) * 6, ship.y + 15,
+      -ship.vx * 0.2 + (this.fxRandom() - 0.5) * 30,
+      130 + this.fxRandom() * 90,
+      0.28, 3.5 + this.fxRandom() * 2.5, COLORS.ship, 0.9, 1);
   }
 
   spawnExplosion(x, y, radius, color, big) {
     const n = big ? 46 : Math.min(18, 7 + Math.floor(radius * 0.55));
     for (let i = 0; i < n; i++) {
-      const a = Math.random() * TAU;
-      const sp = (big ? 120 : 55) + Math.random() * (big ? 340 : 180);
+      const a = this.fxRandom() * TAU;
+      const sp = (big ? 120 : 55) + this.fxRandom() * (big ? 340 : 180);
       this.spawnParticle(x, y, Math.cos(a) * sp, Math.sin(a) * sp,
-        0.3 + Math.random() * (big ? 0.7 : 0.35),
-        (big ? 5 : 2.5) + Math.random() * (big ? 9 : 4), color, 0.9, 1);
+        0.3 + this.fxRandom() * (big ? 0.7 : 0.35),
+        (big ? 5 : 2.5) + this.fxRandom() * (big ? 9 : 4), color, 0.9, 1);
     }
     this.spawnParticle(x, y, 0, 0, big ? 0.35 : 0.16, radius * (big ? 3.4 : 1.9), color, 1, 2);
+  }
+
+  /**
+   * Break a dying craft into its own silhouette.
+   *
+   * Each structural part of the recipe becomes an independent body carrying the
+   * craft's momentum plus an outward impulse, so a Juggernaut sheds five plates
+   * where a Drone sheds three struts — the death shows you what the thing was
+   * built from. `alt` falls 1 -> 0 and shrinks the piece, which reads as it
+   * dropping away from the camera towards the water.
+   *
+   * Skipped for small craft: a cloud of chaff producing forty tumbling parts is
+   * noise rather than spectacle, and it is the worst case for fill rate.
+   */
+  spawnWreckage(e) {
+    if (e.radius < 9 || e.ground) return;
+    const bodies = craftBodies(e.type);
+    const f = e.face || 0;
+    const cos = Math.cos(f), sin = Math.sin(f);
+    const sc = e.radius;
+    const wear = 0.5 + 0.3 * this.fxRandom();
+
+    for (const bd of bodies) {
+      const w = this.wrecks.obtain();
+      w.active = true;
+      // Local -> world for the part's centre.
+      const lx = bd.cx * sc, ly = bd.cy * sc;
+      w.x = e.x + lx * cos - ly * sin;
+      w.y = e.y + lx * sin + ly * cos;
+
+      const ox = w.x - e.x, oy = w.y - e.y;
+      const od = Math.hypot(ox, oy) || 1;
+      const push = 40 + this.fxRandom() * 90;
+      w.vx = (e.vx || 0) * 0.6 + (ox / od) * push + (this.fxRandom() - 0.5) * 40;
+      w.vy = (e.vy || 0) * 0.6 + (oy / od) * push + (this.fxRandom() - 0.5) * 40;
+      // Pieces thrown from further off-centre tumble harder.
+      w.spin = (this.fxRandom() - 0.5) * 6 * (0.4 + od / (sc * 1.6));
+
+      w.angle = f + bd.rot;
+      w.rot = bd.rot;
+      w.shape = bd.shape;
+      w.hw = (bd.hw || 0) * sc;
+      w.hh = (bd.hh || 0) * sc;
+      w.r0 = (bd.r || 0) * sc;
+      w.sides = bd.sides || 4;
+
+      w.alt = 1;
+      w.maxLife = w.life = 1.15 + this.fxRandom() * 0.5;
+      const m = bd.m * wear;
+      w.r = e.color[0] * m; w.g = e.color[1] * m; w.b = e.color[2] * m;
+      w.burn = 0.5 + this.fxRandom() * 0.5;
+      w.smoke = 0;
+    }
+  }
+
+  updateWrecks(dt) {
+    for (const w of this.wrecks.items) {
+      if (!w.active) continue;
+      w.life -= dt;
+      w.x += w.vx * dt;
+      w.y += w.vy * dt;
+      // Wreckage keeps pace with the scrolling world so it falls onto the
+      // terrain it was actually above, not onto whatever slides under it.
+      w.y += this.scrollDelta || 0;
+      const d = Math.pow(0.35, dt);
+      w.vx *= d; w.vy *= d;
+      w.angle += w.spin * dt;
+      w.spin *= Math.pow(0.5, dt);
+      w.alt = Math.max(0, w.life / w.maxLife);
+
+      if (w.burn > 0 && this.fxRandom() < dt * 26) {
+        this.spawnParticle(w.x, w.y, (this.fxRandom() - 0.5) * 30,
+          (this.fxRandom() - 0.5) * 30 - 20, 0.35 + this.fxRandom() * 0.3,
+          2 + this.fxRandom() * 3, [0.55, 0.5, 0.48], 0.9, 1);
+      }
+
+      if (w.life <= 0 || w.y > this.y1 + 40) {
+        w.active = false;
+        if (w.life <= 0 && w.y < this.y1 + 40) this.wreckImpact(w);
+      }
+    }
+  }
+
+  /**
+   * The moment the terrain stops being a backdrop and becomes a place: debris
+   * that lands on water throws a splash, debris that lands on rock scorches it.
+   */
+  wreckImpact(w) {
+    const size = Math.max(w.hh, w.r0, 4);
+    if (this.terrain.surfaceAt(w.x, w.y) === 'water') {
+      this.spawnRing(w.x, w.y, size * 2.2, [0.75, 0.95, 1.1], 0.4);
+      this.spawnParticle(w.x, w.y, 0, 0, 0.22, size * 1.5, [0.9, 1.0, 1.1], 1, 2);
+      const n = 4 + ((this.fxRandom() * 3) | 0);
+      for (let i = 0; i < n; i++) {
+        const a = -Math.PI / 2 + (this.fxRandom() - 0.5) * 2.2;
+        const sp = 50 + this.fxRandom() * 90;
+        this.spawnParticle(w.x, w.y, Math.cos(a) * sp, Math.sin(a) * sp,
+          0.3, 1.5 + this.fxRandom() * 2, [0.8, 0.95, 1.1], 0.92, 1);
+      }
+      this.synth.splash();
+    } else {
+      this.spawnParticle(w.x, w.y, 0, 0, 0.3, size * 1.7, [1.5, 0.7, 0.25], 1, 2);
+      for (let i = 0; i < 6; i++) {
+        const a = this.fxRandom() * TAU;
+        const sp = 30 + this.fxRandom() * 70;
+        this.spawnParticle(w.x, w.y, Math.cos(a) * sp, Math.sin(a) * sp,
+          0.45 + this.fxRandom() * 0.4, 2.5 + this.fxRandom() * 3,
+          [0.42, 0.36, 0.30], 0.9, 1);
+      }
+      this.spawnRing(w.x, w.y, size * 1.6, [0.5, 0.38, 0.28], 0.55);
+      this.synth.thud();
+    }
+  }
+
+  renderWrecks() {
+    const R = this.renderer;
+    for (const w of this.wrecks.items) {
+      if (!w.active) continue;
+      // Shrinking with altitude is what sells the fall on a flat 2D plane.
+      const k = 0.55 + 0.45 * w.alt;
+      const a = Math.min(1, w.alt * 2.2);
+      if (w.shape === 'gon') {
+        R.polyLit(w.x, w.y, w.r0 * k, w.sides, w.angle, w.r, w.g, w.b, a, 0.9);
+      } else {
+        R.slabLit(w.x, w.y, w.hw * k, w.hh * k, w.angle, w.r, w.g, w.b, a, 0.85);
+      }
+      if (w.burn > 0) {
+        const heat = w.burn * w.alt;
+        R.glow(w.x, w.y, Math.max(w.hh, w.r0) * 1.5 * k,
+          1.5, 0.55 + 0.3 * heat, 0.2, 0.3 * heat, 1.8);
+      }
+    }
   }
 
   spawnRing(x, y, radius, color, life = 0.45) {
@@ -1218,9 +1444,53 @@ export class Game {
 
   // --- update -----------------------------------------------------------------
 
+  /**
+   * Queue a hitstop.
+   *
+   * Duration is divided by sqrt(timeScale) because a freeze is measured in real
+   * seconds while the world runs faster: a flat 60ms at 4x speed is 240ms of
+   * game time and reads as a stutter rather than a hit. The rolling budget
+   * stops a screen-clearing Nova from becoming a slideshow — kills over budget
+   * still play every other piece of feedback, they just do not stop the clock.
+   */
+  addHitstop(seconds) {
+    let sec = seconds;
+    if (this.reducedMotion) sec *= 0.5;
+    sec = Math.min(HITSTOP_MAX, sec / Math.sqrt(Math.max(1, this.timeScale)));
+    const spend = Math.min(sec, this.freezeBudget);
+    if (spend <= 0.0005) return;
+    this.freezeBudget -= spend;
+    this.freeze = Math.max(this.freeze, spend);
+  }
+
+  /** How much this craft's death is worth interrupting the game for. */
+  killWeight(e) {
+    const base = enemyHP(this.state.run.wave) || 1;
+    return Math.max(0, Math.min(1, e.maxHp / (base * 2.5)));
+  }
+
   update(dtRaw) {
     if (this.paused || this.state.run.over) { this.decayFeedback(dtRaw); return; }
-    const dt = Math.min(0.05, dtRaw) * this.timeScale;
+
+    // Held frame. Shake and flash keep animating so it reads as a deliberate
+    // beat; a completely static frame just looks like a dropped one.
+    if (this.freeze > 0) {
+      this.freeze -= dtRaw;
+      this.decayFeedback(dtRaw);
+      return;
+    }
+    this.freezeBudget = Math.min(FREEZE_BUDGET, this.freezeBudget + dtRaw * FREEZE_BUDGET);
+
+    let scale = this.timeScale;
+    if (this.slowmo > 0) {
+      this.slowmo = Math.max(0, this.slowmo - dtRaw);
+      // Ease back to normal rather than snapping — the ramp is the victory lap.
+      const k = 1 - this.slowmo / SLOWMO_DUR;
+      scale *= SLOWMO_MIN + (1 - SLOWMO_MIN) * k * k;
+    }
+    this._knocks = 0;
+
+    const dt = Math.min(0.05, dtRaw) * scale;
     const { run } = this.state;
     run.elapsed += dt;
 
@@ -1239,6 +1509,7 @@ export class Game {
     this.updateWingmen(dt);
     this.updateSystems(dt);
     this.updatePickups(dt);
+    this.updateWrecks(dt);
     this.updateParticles(dt);
     this.updateFloaters(dt);
     this.updateRegen(dt);
@@ -1422,13 +1693,16 @@ export class Game {
         const rr = e.radius + b.radius;
         if (dx * dx + dy * dy <= rr * rr) {
           b.hits.add(e);
-          this.damageEnemy(e, b.dmg, b.crit);
+          const bs = Math.hypot(b.vx, b.vy) || 1;
+          const frac = Math.min(1, b.dmg / (e.maxHp || 1));
+          this.damageEnemy(e, b.dmg, b.crit, true, [b.vx / bs, b.vy / bs]);
           this.synth.hit();
-          for (let k = 0; k < 2; k++) {
-            const a = Math.random() * TAU;
-            const sp = 40 + Math.random() * 90;
+          const sparks = 1 + Math.round(6 * frac);
+          for (let k = 0; k < sparks; k++) {
+            const a = this.fxRandom() * TAU;
+            const sp = 40 + this.fxRandom() * (90 + 260 * frac);
             this.spawnParticle(b.x, b.y, Math.cos(a) * sp, Math.sin(a) * sp,
-              0.18, 2 + Math.random() * 2, e.color, 0.9, 1);
+              0.18 + frac * 0.14, 2 + this.fxRandom() * (2 + 3 * frac), e.color, 0.9, 1);
           }
           if (b.missile) {
             this.spawnExplosion(b.x, b.y, 13, COLORS.missile, false);
@@ -1482,6 +1756,16 @@ export class Game {
       e.lastX = e.x;
       e.t += dt;
       if (e.hitFlash > 0) e.hitFlash -= dt;
+      if (e.hitPower > 0) e.hitPower = Math.max(0, e.hitPower - dt * 4);
+
+      // Recoil offset springs back fast, so a shove reads as a jolt rather
+      // than as the craft being blown off course.
+      if (e.kx !== 0 || e.ky !== 0) {
+        const decay = Math.pow(0.0004, dt);
+        e.kx *= decay; e.ky *= decay;
+        if (Math.abs(e.kx) < 0.05) e.kx = 0;
+        if (Math.abs(e.ky) < 0.05) e.ky = 0;
+      }
       if (e.phase) e.phaseT += dt * 2.6;
       if (regen > 0 && e.hp < e.maxHp) e.hp = Math.min(e.maxHp, e.hp + e.maxHp * regen * dt);
 
@@ -2187,6 +2471,7 @@ export class Game {
     this.renderBackdrop(time);
     this.terrain.render(R, pal, time, this.y0, this.y1);
     this.renderDebris();
+    this.renderWrecks();
     this.renderPickups(time);
     this.renderEnemies(time);
     this.renderSystems(time);
@@ -2285,6 +2570,20 @@ export class Game {
    * Silhouettes are deliberately distinct in outline, not just colour — at phone
    * size, on a bloom-heavy background, shape is what the eye actually resolves.
    */
+  /**
+   * Draw one craft from its data recipe.
+   *
+   * Parts live in a local frame where +y is the heading and one unit is the
+   * craft's radius, so a silhouette works at any size and angle with no
+   * sprites. Structure draws DIM and only the accent parts glow: parts blend
+   * additively, so a craft of eight full-brightness pieces sums to white at the
+   * fuselage and every archetype ends up looking the same. Hull colour also
+   * darkens with damage, which is how condition stays legible from the paint
+   * rather than from a bar floating overhead.
+   *
+   * The recipe is deliberately data rather than draw calls — js/game/craft.js
+   * explains why, but briefly: the same part list also becomes the wreckage.
+   */
   renderCraft(e, r, g, b, alpha) {
     const R = this.renderer;
     const s = e.radius;
@@ -2293,218 +2592,50 @@ export class Game {
     const wx = (lx, ly) => e.x + lx * s * cos - ly * s * sin;
     const wy = (lx, ly) => e.y + lx * s * sin + ly * s * cos;
 
-    // Local-frame helpers.
-    //
-    // Structure is drawn DIM and cockpits bright. Parts blend additively, so a
-    // craft made of eight overlapping full-brightness pieces sums to white at
-    // the fuselage and every archetype ends up looking identical. Dimming the
-    // hull and letting one hot cockpit sit on top is what makes a silhouette
-    // read as a ship rather than a glowing smear.
-    // Structure is a lit, muted hull; only the accent parts glow. Hull colour
-    // darkens with damage, so a craft's condition is legible from its paint
-    // rather than from a bar floating over it.
     const acc = e.accent || [r, g, b];
     const hp = Math.max(0, Math.min(1, e.hp / (e.maxHp || 1)));
     const wear = 0.45 + 0.55 * hp;
     const hr = r * wear, hg = g * wear, hb = b * wear;
 
-    const bar = (x1, y1, x2, y2, w, m = 1, a = alpha) =>
-      R.beamLit(wx(x1, y1), wy(x1, y1), wx(x2, y2), wy(x2, y2), w * s,
-        hr * m, hg * m, hb * m, a, 0.9);
-    const dot = (x, y, rad, m = 1, a = alpha) =>
-      R.disc(wx(x, y), wy(x, y), rad * s, acc[0] * m * 0.5, acc[1] * m * 0.5, acc[2] * m * 0.5, a);
-    const gon = (x, y, rad, sides, rot, m = 1, a = alpha) =>
-      R.polyLit(wx(x, y), wy(x, y), rad * s, sides, f + rot,
-        hr * m, hg * m, hb * m, a, 0.9);
-
-    switch (e.type) {
-      case 'darter':      // needle interceptor — long, thin, all nose
-        bar(0, -1.1, 0, 1.4, 0.24, 1.1);
-        bar(-0.7, -0.5, 0, -0.1, 0.16, 0.8);
-        bar(0.7, -0.5, 0, -0.1, 0.16, 0.8);
-        dot(0, 0.55, 0.2, 2.2);
-        break;
-
-      case 'brute':       // heavy bomber — wide slab, twin engines
-        gon(0, 0, 0.62, 6, 0, 0.85);
-        bar(-1.5, -0.15, 1.5, -0.15, 0.3, 1.0);
-        bar(-1.1, -0.15, -0.85, -0.85, 0.22, 0.8);
-        bar(1.1, -0.15, 0.85, -0.85, 0.22, 0.8);
-        bar(0, -0.7, 0, 1.0, 0.34, 1.05);
-        dot(0, 0.35, 0.26, 2.0);
-        dot(-0.62, -0.8, 0.16, 1.8);
-        dot(0.62, -0.8, 0.16, 1.8);
-        break;
-
-      case 'splitter':    // twin-hull — visibly two things bolted together
-        bar(-0.5, -0.8, -0.5, 0.9, 0.3, 1.0);
-        bar(0.5, -0.8, 0.5, 0.9, 0.3, 1.0);
-        bar(-0.5, 0.1, 0.5, 0.1, 0.26, 0.8);
-        dot(-0.5, 0.5, 0.2, 1.9);
-        dot(0.5, 0.5, 0.2, 1.9);
-        break;
-
-      case 'shielder':    // saucer — round, no wings, obviously armoured
-        gon(0, 0, 0.78, 8, 0.8);
-        R.ring(e.x, e.y, s * 1.02, s * 0.16, r * 0.7, g * 0.7, b * 0.7, alpha * 0.9);
-        dot(0, 0.1, 0.3, 2.0);
-        break;
-
-      case 'sentinel':    // gunship — side pods and forward barrels
-        bar(0, -0.9, 0, 1.0, 0.42, 1.0);
-        bar(-1.0, -0.3, -1.0, 0.5, 0.26, 0.85);
-        bar(1.0, -0.3, 1.0, 0.5, 0.26, 0.85);
-        bar(-1.0, 0.1, 0, 0.1, 0.2, 0.7);
-        bar(1.0, 0.1, 0, 0.1, 0.2, 0.7);
-        bar(-1.0, 0.5, -1.0, 1.05, 0.12, 1.6);
-        bar(1.0, 0.5, 1.0, 1.05, 0.12, 1.6);
-        dot(0, 0.3, 0.26, 2.1);
-        break;
-
-      case 'gunship':     // rotorcraft — stub wings under a spinning disc
-        bar(0, -0.8, 0, 0.95, 0.44, 1.0);
-        bar(-0.85, -0.2, -0.85, 0.35, 0.24, 0.85);
-        bar(0.85, -0.2, 0.85, 0.35, 0.24, 0.85);
-        bar(-0.85, 0.1, 0, 0.1, 0.18, 0.7);
-        bar(0.85, 0.1, 0, 0.1, 0.18, 0.7);
-        R.ring(e.x, e.y, s * 1.15, s * 0.1, r * 0.5, g * 0.5, b * 0.5, alpha * 0.55);
-        dot(0, 0.35, 0.24, 2.0);
-        break;
-
-      case 'radial':      // turret ring — barrels facing every direction
-        gon(0, 0, 0.6, 8, 0, 0.9);
-        for (let i = 0; i < 8; i++) {
-          const a2 = (i / 8) * TAU;
-          bar(Math.cos(a2) * 0.6, Math.sin(a2) * 0.6,
-              Math.cos(a2) * 1.05, Math.sin(a2) * 1.05, 0.14, 1.0);
+    for (const part of craftParts(e.type)) {
+      const m = part.m;
+      switch (part.t) {
+        case 'bar':
+          R.beamLit(wx(part.a[0], part.a[1]), wy(part.a[0], part.a[1]),
+            wx(part.b[0], part.b[1]), wy(part.b[0], part.b[1]), part.w * s,
+            hr * m, hg * m, hb * m, alpha, 0.9);
+          break;
+        case 'gon':
+          R.polyLit(wx(part.p[0], part.p[1]), wy(part.p[0], part.p[1]),
+            part.r * s, part.sides, f + part.rot, hr * m, hg * m, hb * m, alpha, 0.9);
+          break;
+        case 'slab':
+          R.slabLit(wx(part.p[0], part.p[1]), wy(part.p[0], part.p[1]),
+            part.hw * s, part.hh * s, f, hr * m, hg * m, hb * m, alpha, part.shade);
+          break;
+        case 'dot':
+          R.disc(wx(part.p[0], part.p[1]), wy(part.p[0], part.p[1]), part.r * s,
+            acc[0] * m * 0.5, acc[1] * m * 0.5, acc[2] * m * 0.5, alpha);
+          break;
+        case 'ring': {
+          // `hullFlat` is the undarkened hull colour — a couple of rings were
+          // authored against it rather than the damage-worn tint.
+          const c = part.tint === 'accent' ? acc
+            : part.tint === 'hull' ? [hr, hg, hb] : [r, g, b];
+          R.ring(e.x, e.y, part.r * s, part.w * s,
+            c[0] * m, c[1] * m, c[2] * m, alpha * part.alpha);
+          break;
         }
-        dot(0, 0, 0.3, 2.2);
-        break;
-
-      case 'lancer':      // focusing spine with prongs
-        bar(0, -1.0, 0, 1.25, 0.3, 1.0);
-        bar(-0.55, 0.35, -0.3, 1.15, 0.16, 1.2);
-        bar(0.55, 0.35, 0.3, 1.15, 0.16, 1.2);
-        bar(-0.75, -0.35, 0.75, -0.35, 0.22, 0.8);
-        dot(0, 1.2, 0.2, 2.4);
-        dot(0, -0.2, 0.24, 1.9);
-        break;
-
-      case 'dread':       // capital ship — layered slabs and sponsons
-        gon(0, 0, 0.7, 6, 0, 0.8);
-        bar(0, -1.0, 0, 1.1, 0.5, 0.95);
-        bar(-1.25, -0.3, 1.25, -0.3, 0.32, 0.9);
-        bar(-1.25, -0.3, -1.05, 0.5, 0.28, 0.85);
-        bar(1.25, -0.3, 1.05, 0.5, 0.28, 0.85);
-        bar(-1.05, 0.5, -1.05, 0.95, 0.15, 1.6);
-        bar(1.05, 0.5, 1.05, 0.95, 0.15, 1.6);
-        dot(0, -0.05, 0.3, 2.1);
-        break;
-
-      case 'wraith':      // stealth delta — one clean swept wing, no fuselage
-        gon(0, 0.1, 0.95, 3, 0, 0.7);
-        bar(-0.95, -0.5, 0.95, -0.5, 0.18, 1.1);
-        dot(0, 0.3, 0.2, 1.9);
-        break;
-
-      case 'boss': {      // battleship — bridge, sponsons, gun batteries
-        gon(0, 0, 0.72, 6, 0, 0.75);
-        bar(0, -1.0, 0, 1.1, 0.55, 0.95);
-        bar(-1.35, -0.35, 1.35, -0.35, 0.34, 0.9);
-        bar(-1.35, -0.35, -1.15, 0.55, 0.3, 0.85);
-        bar(1.35, -0.35, 1.15, 0.55, 0.3, 0.85);
-        bar(-1.15, 0.55, -1.15, 1.0, 0.16, 1.7);
-        bar(1.15, 0.55, 1.15, 1.0, 0.16, 1.7);
-        bar(0, 0.6, 0, 1.25, 0.2, 1.8);
-        dot(0, -0.1, 0.34, 2.2);
-        dot(-0.55, -0.75, 0.2, 1.6);
-        dot(0.55, -0.75, 0.2, 1.6);
-        break;
+        case 'orbit':
+          for (let i = 0; i < part.n; i++) {
+            const a2 = e.t * part.speed + (i / part.n) * TAU;
+            R.disc(e.x + Math.cos(a2) * s * part.r, e.y + Math.sin(a2) * s * part.r,
+              s * part.size, acc[0], acc[1], acc[2], alpha);
+          }
+          break;
+        default:
+          break;
       }
-
-      case 'mite':        // chaff — a bare dart, barely a craft
-        bar(0, -0.6, 0, 0.9, 0.4, 1.1);
-        dot(0, 0.35, 0.32, 2.2);
-        break;
-
-      case 'bomber':      // fat ordnance hull with a live warhead up front
-        gon(0, -0.05, 0.72, 4, 0.78, 0.95);
-        bar(-0.9, -0.3, 0.9, -0.3, 0.22, 0.85);
-        dot(0, 0.62, 0.34, 2.4);
-        R.ring(e.x, e.y, s * 0.95, s * 0.13, acc[0], acc[1], acc[2], alpha * 0.7);
-        break;
-
-      case 'juggernaut':  // slab of armour; layered plates, tiny cockpit
-        gon(0, 0, 0.9, 7, 0.2, 0.7);
-        gon(0, 0, 0.62, 7, 0.5, 0.95);
-        bar(-1.15, -0.25, 1.15, -0.25, 0.3, 0.8);
-        bar(-1.15, 0.35, 1.15, 0.35, 0.3, 0.8);
-        bar(0, -0.9, 0, 0.95, 0.4, 1.05);
-        dot(0, 0.25, 0.2, 2.0);
-        break;
-
-      case 'sniper':      // long rail down the spine, minimal airframe
-        bar(0, -0.7, 0, 1.5, 0.16, 1.2);
-        bar(-0.55, -0.35, 0.55, -0.35, 0.2, 0.9);
-        bar(-0.3, -0.6, 0.3, -0.6, 0.16, 0.8);
-        dot(0, 1.42, 0.16, 2.6);
-        dot(0, -0.3, 0.2, 1.8);
-        break;
-
-      case 'warden':      // support hull under a projector ring
-        gon(0, 0, 0.62, 6, 0.3, 0.9);
-        R.ring(e.x, e.y, s * 1.1, s * 0.12, acc[0] * 0.8, acc[1] * 0.8, acc[2] * 0.8, alpha * 0.8);
-        for (let i = 0; i < 3; i++) {
-          const a2 = e.t * 0.9 + (i / 3) * TAU;
-          R.disc(e.x + Math.cos(a2) * s * 1.1, e.y + Math.sin(a2) * s * 1.1,
-            s * 0.13, acc[0], acc[1], acc[2], alpha);
-        }
-        dot(0, 0, 0.3, 2.0);
-        break;
-
-      case 'turret':      // AA emplacement — ring base, twin barrels
-        R.ring(e.x, e.y, s * 1.05, s * 0.2, hr * 1.2, hg * 1.2, hb * 1.2, alpha);
-        gon(0, 0, 0.66, 8, 0.2, 1.0);
-        bar(-0.24, 0.1, -0.24, 1.15, 0.14, 1.3);
-        bar(0.24, 0.1, 0.24, 1.15, 0.14, 1.3);
-        dot(0, 0, 0.26, 2.0);
-        break;
-
-      case 'tank':        // tracked hull with a turret and gun
-        bar(-0.72, -0.7, -0.72, 0.7, 0.3, 0.85);
-        bar(0.72, -0.7, 0.72, 0.7, 0.3, 0.85);
-        R.slabLit(e.x, e.y, s * 0.62, s * 0.72, f, hr, hg, hb, alpha, 0.9);
-        gon(0, 0.05, 0.44, 6, 0.3, 1.15);
-        bar(0, 0.3, 0, 1.2, 0.13, 1.3);
-        dot(0, 0.05, 0.2, 1.9);
-        break;
-
-      case 'warship':     // hull, superstructure, deck guns
-        R.slabLit(e.x, e.y, s * 0.42, s * 1.15, f, hr, hg, hb, alpha, 0.95);
-        R.slabLit(wx(0, -0.15), wy(0, -0.15), s * 0.3, s * 0.4, f, hr * 1.3, hg * 1.3, hb * 1.3, alpha, 0.8);
-        bar(-0.34, 0.55, -0.34, 1.0, 0.12, 1.3);
-        bar(0.34, 0.55, 0.34, 1.0, 0.12, 1.3);
-        bar(0, -0.5, 0, -1.0, 0.16, 1.1);
-        dot(0, -0.15, 0.2, 1.8);
-        dot(0, 0.75, 0.14, 1.6);
-        break;
-
-      case 'sam':         // launch rails on a rotating base
-        R.ring(e.x, e.y, s * 0.95, s * 0.16, hr * 1.2, hg * 1.2, hb * 1.2, alpha);
-        gon(0, 0, 0.55, 6, 0, 1.0);
-        for (let i = -1; i <= 1; i += 2) {
-          bar(i * 0.32, -0.1, i * 0.32, 0.95, 0.17, 1.2);
-          dot(i * 0.32, 0.9, 0.13, 2.2);
-        }
-        dot(0, 0, 0.22, 1.7);
-        break;
-
-      default:            // drone — the workhorse dart
-        bar(0, -0.85, 0, 1.05, 0.3, 1.05);
-        bar(-1.05, -0.45, 0, 0.15, 0.22, 0.85);
-        bar(1.05, -0.45, 0, 0.15, 0.22, 0.85);
-        dot(0, 0.4, 0.24, 2.1);
-        break;
     }
 
     // Running light — the one deliberately hot part of an otherwise matte hull.
@@ -2537,9 +2668,12 @@ export class Game {
       if (e.phase) alpha = Math.sin(e.phaseT) > 0.55 ? 0.22 : 0.85;
       if (e.hitFlash > 0) {
         // Additive, not a wash: enough to register a hit, not so much that a
-        // constantly-shot enemy is permanently white.
-        const f = e.hitFlash / 0.12;
-        r += 0.9 * f; g += 0.9 * f; b += 0.9 * f;
+        // constantly-shot enemy is permanently white. Intensity scales with the
+        // share of hull the hit took, so a chip and a hammer blow look different.
+        const f = e.hitFlash / (e.hitFlashMax || 0.12);
+        r += (0.6 + 1.2 * e.hitPower) * f;
+        g += (0.6 + 1.2 * e.hitPower) * f;
+        b += (0.6 + 1.2 * e.hitPower) * f;
       }
       if (this.enrage > 0) {
         const k = Math.min(1.4, this.enrage * 0.7);
@@ -2547,6 +2681,12 @@ export class Game {
       }
 
       const hpFrac = Math.max(0, e.hp / e.maxHp);
+
+      // Shift into recoil space for the draw, then put it straight back. Every
+      // other system — collision, targeting, spawning — sees the true position.
+      const trueX = e.x, trueY = e.y;
+      e.x += e.kx; e.y += e.ky;
+
       R.glow(e.x, e.y, e.radius * 2.2, r, g, b, 0.09 * alpha, 2.3);
       this.renderCraft(e, r, g, b, alpha);
 
@@ -2585,6 +2725,7 @@ export class Game {
         R.ring(e.x, e.y, e.radius * 2.0, 3.0, 1.5, 0.4, 0.2, 0.25);
         R.ring(e.x, e.y, e.radius * 2.0, 3.0 * hpFrac, 1.6, 0.5, 0.2, 0.9);
       }
+      e.x = trueX; e.y = trueY;
     }
   }
 
