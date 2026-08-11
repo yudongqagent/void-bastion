@@ -54,8 +54,9 @@ async function fetchWithProgress(url, onBytes) {
 export async function loadMaterials(base, onProgress = () => {}) {
   try {
     const manifest = await (await fetch(base + 'manifest.json')).json();
-    const names = [manifest.material, manifest.surface];
-    if (!names[0] || !names[1]) return null;
+    const names = [manifest.material, manifest.surface,
+      manifest.craft_albedo, manifest.craft_surface].filter(Boolean);
+    if (names.length < 2) return null;
 
     let cache = null;
     try {
@@ -68,10 +69,10 @@ export async function loadMaterials(base, onProgress = () => {}) {
     // and track each one's own fraction. Overstating early progress is the
     // usual sin of loading bars; this cannot, because it only ever reports
     // bytes that actually landed.
-    const frac = [0, 0];
+    const frac = names.map(() => 0);
     const report = (i, got, total) => {
       frac[i] = total ? got / total : 1;
-      onProgress((frac[0] + frac[1]) / 2, 'materials');
+      onProgress(frac.reduce((a, v) => a + v, 0) / frac.length, 'materials');
     };
 
     const blobs = await Promise.all(names.map(async (name, i) => {
@@ -89,9 +90,14 @@ export async function loadMaterials(base, onProgress = () => {}) {
       return blob;
     }));
 
-    const [albedo, surface] = await Promise.all(blobs.map((b) => createImageBitmap(b)));
+    const imgs = await Promise.all(blobs.map((b) => createImageBitmap(b)));
     onProgress(1, 'materials');
-    return { albedo, surface };
+    return {
+      albedo: imgs[0], surface: imgs[1],
+      craftAlbedo: imgs[2] || null, craftSurface: imgs[3] || null,
+      craftGrid: manifest.craftGrid || 5,
+      craftOrder: manifest.craftOrder || null,
+    };
   } catch (err) {
     console.warn('[void-bastion] materials unavailable, running untextured:', err);
     return null;

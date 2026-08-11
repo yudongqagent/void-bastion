@@ -2576,21 +2576,78 @@ export class Game {
    * The recipe is deliberately data rather than draw calls — js/game/craft.js
    * explains why, but briefly: the same part list also becomes the wreckage.
    */
+  /**
+   * Draw one craft.
+   *
+   * When the baked atlas is available this is a single sprite: ambient
+   * occlusion and contact shadows were computed offline against the whole
+   * craft, which drawing one primitive at a time cannot do — additive overlaps
+   * make a wing crossing a fuselage BRIGHTER, when it should be darker. The
+   * normal is baked but the shade is not, so the highlight still sweeps as the
+   * craft banks.
+   *
+   * The fallback below draws the recipe primitive by primitive, exactly as
+   * before, so a missing or still-downloading atlas costs fidelity and nothing
+   * else. Rings and orbit nodes are drawn in both paths: they animate, so they
+   * cannot be baked.
+   */
   renderCraft(e, r, g, b, alpha) {
     const R = this.renderer;
     const s = e.radius;
     const f = e.face || 0;
-    const cos = Math.cos(f), sin = Math.sin(f);
-    const wx = (lx, ly) => e.x + lx * s * cos - ly * s * sin;
-    const wy = (lx, ly) => e.y + lx * s * sin + ly * s * cos;
-
     const acc = e.accent || [r, g, b];
     const hp = Math.max(0, Math.min(1, e.hp / (e.maxHp || 1)));
     const wear = 0.45 + 0.55 * hp;
+
+    if (R.craftReady) {
+      const layer = this.craftLayer(e.type);
+      if (layer >= 0) {
+        // EXTENT in the baker: the tile spans 1.35 radii each way.
+        const size = s * 1.35;
+        if (!e.ground) {
+          // Flyers throw a long shadow; emplacements sit on the deck.
+          const off = s * 0.30;
+          R.craftShadow(e.x + off, e.y + off * 0.72, size, f, layer, 0.34 * alpha);
+        }
+        R.craft(e.x, e.y, size, f, layer, r * wear, g * wear, b * wear, alpha, acc);
+        this.renderCraftFX(e, s, f, acc, alpha, e.t || 0);
+        return;
+      }
+    }
+    this.renderCraftParts(e, r, g, b, alpha, wear, acc, s, f);
+  }
+
+  /** Animated layers that cannot be baked: shield rings and orbiting nodes. */
+  renderCraftFX(e, s, f, acc, alpha, t) {
+    const R = this.renderer;
+    for (const part of craftParts(e.type)) {
+      if (part.t === 'ring') {
+        const c = part.tint === 'accent' ? acc : [e.color[0], e.color[1], e.color[2]];
+        R.ring(e.x, e.y, part.r * s, part.w * s,
+          c[0] * part.m, c[1] * part.m, c[2] * part.m, alpha * part.alpha);
+      } else if (part.t === 'orbit') {
+        for (let i = 0; i < part.n; i++) {
+          const a2 = t * part.speed + (i / part.n) * TAU;
+          R.disc(e.x + Math.cos(a2) * s * part.r, e.y + Math.sin(a2) * s * part.r,
+            s * part.size, acc[0], acc[1], acc[2], alpha);
+        }
+      }
+    }
+    if (!e.ground) {
+      R.glow(e.x - Math.sin(f) * -s * 1.05, e.y + Math.cos(f) * -s * 1.05,
+        s * 0.8, acc[0], acc[1], acc[2], 0.28 * alpha, 1.9);
+    }
+  }
+
+  /** Untextured fallback: the recipe drawn primitive by primitive. */
+  renderCraftParts(e, r, g, b, alpha, wear, acc, s, f) {
+    const R = this.renderer;
+    const cos = Math.cos(f), sin = Math.sin(f);
+    const wx = (lx, ly) => e.x + lx * s * cos - ly * s * sin;
+    const wy = (lx, ly) => e.y + lx * s * sin + ly * s * cos;
     const hr = r * wear, hg = g * wear, hb = b * wear;
-    // Badly damaged craft switch to the scorched surface — the material itself
-    // reports condition, alongside the colour darkening it already did.
     const mm = materialFor(e.type);
+    const hp = Math.max(0, Math.min(1, e.hp / (e.maxHp || 1)));
     const mat = hp < 0.34 ? MAT.WRECK : mm[0];
     const uv = mm[1];
 
@@ -2615,8 +2672,6 @@ export class Game {
             acc[0] * m * 0.5, acc[1] * m * 0.5, acc[2] * m * 0.5, alpha);
           break;
         case 'ring': {
-          // `hullFlat` is the undarkened hull colour — a couple of rings were
-          // authored against it rather than the damage-worn tint.
           const c = part.tint === 'accent' ? acc
             : part.tint === 'hull' ? [hr, hg, hb] : [r, g, b];
           R.ring(e.x, e.y, part.r * s, part.w * s,
@@ -2634,14 +2689,22 @@ export class Game {
           break;
       }
     }
-
-    // Running light — the one deliberately hot part of an otherwise matte hull.
     R.glow(wx(0, 0.3), wy(0, 0.3), s * 0.5, acc[0], acc[1], acc[2], 0.34 * alpha, 1.9);
-
-    // Engine wash trailing behind — only for things that actually fly.
     if (!e.ground) {
       R.glow(wx(0, -1.05), wy(0, -1.05), s * 0.8, acc[0], acc[1], acc[2], 0.28 * alpha, 1.9);
     }
+  }
+
+  /** Atlas layer for a craft type, or -1 when the bake has no such class. */
+  craftLayer(type) {
+    const order = this.renderer.craftOrder;
+    if (!order) return -1;
+    let idx = this._craftLayerCache && this._craftLayerCache[type];
+    if (idx === undefined) {
+      idx = order.indexOf(type);
+      (this._craftLayerCache || (this._craftLayerCache = {}))[type] = idx;
+    }
+    return idx;
   }
 
   renderEnemies(time) {

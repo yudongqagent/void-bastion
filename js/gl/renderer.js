@@ -18,6 +18,8 @@ export const SHAPE = {
   POLY: 3,  // regular n-gon — enemies (param.x = sides)
   BEAM: 4,  // soft-edged rectangle — lasers, tracers
   SPARK:5,  // elongated glow — debris streaks
+  CRAFT:6,  // baked craft sprite — lit dynamically from its baked normal
+  SHADOW:7, // a craft's alpha mask alone, for the drop shadow
 };
 
 const FLOATS_PER_INSTANCE = 14;
@@ -42,6 +44,7 @@ flat out int v_shape;
 flat out float v_rot;
 out vec2 v_uv;
 flat out float v_layer;
+flat out float v_accentB;
 
 void main() {
   v_local = a_corner;
@@ -50,12 +53,20 @@ void main() {
   v_shape = int(a_shape + 0.5);
   v_rot = a_rot;
   v_layer = a_mat.x;
-  // uv is derived from WORLD SIZE, not from the quad's normalised corner.
+  v_accentB = a_mat.y;
+  // Craft sprites are a whole baked image, so they map the quad 0..1 exactly.
+  // Everything else derives uv from WORLD SIZE rather than the quad's corner.
   // a_mat.y is "world pixels per texture repeat", so texel density is the same
   // on a small fighter and a large island, and a long thin slab no longer
   // squashes its texture down to the shape's aspect ratio — which is exactly
   // what turned convoy hulls into smeared planks.
-  v_uv = (a_corner * 0.5 + 0.5) * (a_size * 2.0) / max(a_mat.y, 1.0);
+  if (a_shape > 5.5) {
+    v_uv = a_corner * 0.5 + 0.5;
+  } else {
+    // A long thin slab would otherwise squash its texture to its own aspect
+    // ratio, which is what turned convoy hulls into smeared planks.
+    v_uv = (a_corner * 0.5 + 0.5) * (a_size * 2.0) / max(a_mat.y, 1.0);
+  }
 
   float c = cos(a_rot), s = sin(a_rot);
   vec2 p = a_corner * a_size;
@@ -75,6 +86,7 @@ flat in int v_shape;
 flat in float v_rot;
 in vec2 v_uv;
 flat in float v_layer;
+flat in float v_accentB;
 out vec4 outColor;
 
 // Material layers. sampler2DArray rather than an atlas: each material wraps and
@@ -82,6 +94,9 @@ out vec4 outColor;
 // material into its neighbour the way an atlas would.
 precision highp sampler2DArray;
 uniform sampler2DArray u_mat;    // RGB albedo detail, A ambient occlusion
+uniform sampler2DArray u_craft;  // RGB baked albedo x AO x contact shadow, A coverage
+uniform sampler2DArray u_cnrm;   // RG tangent normal, B roughness, A emissive
+uniform float u_craftOn;
 uniform sampler2DArray u_surf;   // RG tangent normal, B roughness, A metalness
 uniform float u_texOn;           // 0 until the atlases have loaded
 
@@ -137,6 +152,39 @@ vec3 material(vec3 tint, float amount) {
   vec3 base = tint * alb * ao * mix(1.0, diff, amount) * MATERIAL_GAIN;
   // Dielectrics glint white; metals tint their highlight with their own colour.
   return base + spec * mix(vec3(1.0), tint, metal) * amount;
+}
+
+/**
+ * A baked craft sprite, lit live.
+ *
+ * Ambient occlusion and contact shadows are already in the albedo — they were
+ * computed offline against the whole craft, which a renderer drawing one
+ * primitive at a time cannot do. What is NOT baked is the final shade: the
+ * normal is, so the highlight still sweeps across the hull as the craft banks
+ * rather than being frozen into the image.
+ */
+vec4 craftSprite(vec3 tint, vec3 accent) {
+  vec4 alb = texture(u_craft, vec3(v_uv, v_layer));
+  if (alb.a <= 0.004) discard;
+  vec4 srf = texture(u_cnrm, vec3(v_uv, v_layer));
+
+  vec3 N = normalize(vec3((srf.rg * 2.0 - 1.0) * 1.6, 1.0));
+  float c = cos(-v_rot), s = sin(-v_rot);
+  vec2 L2 = vec2(KEY_LIGHT.x * c - KEY_LIGHT.y * s, KEY_LIGHT.x * s + KEY_LIGHT.y * c);
+  vec3 L = normalize(vec3(L2, 0.62));
+
+  float rough = max(srf.b, 0.05);
+  float diff = 0.60 + 0.66 * max(dot(N, L), 0.0);
+  vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
+  float spec = pow(max(dot(N, H), 0.0), mix(80.0, 6.0, rough)) * (1.0 - rough) * 1.1;
+
+  vec3 rgb = tint * alb.rgb * 1.74 * diff + spec * mix(vec3(1.0), tint, 0.45);
+  // Running lights: added, not substituted, and only where the mask is strong.
+  // Replacing the hull across the whole dot at accent*2.2 blew each craft out
+  // into a single glowing ellipse once bloom got hold of it.
+  float lamp = smoothstep(0.45, 0.95, srf.a);
+  rgb += accent * 1.15 * lamp;
+  return vec4(rgb, alb.a);
 }
 
 const float TAU = 6.28318530718;
@@ -206,9 +254,20 @@ void main() {
     } else {
       rgb *= 1.0 + 1.3 * (1.0 - ay);
     }
-  } else {                                  // SPARK
+  } else if (v_shape == 5) {                // SPARK
     float d = length(vec2(p.x, p.y * 2.2));
     alpha = pow(max(0.0, 1.0 - d), 1.6);
+  } else if (v_shape == 6) {                // CRAFT
+    if (u_craftOn < 0.5) discard;
+    // v_param carries the accent colour packed as two components; the third
+    // rides in the unused alpha headroom of the instance colour.
+    vec4 cs = craftSprite(v_color.rgb, vec3(v_param.x, v_param.y, v_accentB));
+    rgb = cs.rgb;
+    alpha = cs.a;
+  } else {                                  // SHADOW
+    if (u_craftOn < 0.5) discard;
+    alpha = texture(u_craft, vec3(v_uv, v_layer)).a;
+    rgb = vec3(0.0);
   }
 
   alpha *= v_color.a;
@@ -339,6 +398,9 @@ export class Renderer {
     this.materialsReady = false;
     this.matTex = null;
     this.surfTex = null;
+    this.craftReady = false;
+    this.craftTex = null;
+    this.craftNrmTex = null;
 
     this.data = new Float32Array(MAX_INSTANCES * FLOATS_PER_INSTANCE);
     this.count = 0;
@@ -467,7 +529,7 @@ export class Renderer {
    * back to the original position-based shading, so a missing or failed
    * download costs detail and nothing else.
    */
-  setMaterials(albedoImage, surfaceImage, grid = 4) {
+  _uploadPair(albedoImage, surfaceImage, grid, srgbAlbedo = true) {
     const gl = this.gl;
     const tile = Math.floor(albedoImage.width / grid);
     const layers = grid * grid;
@@ -505,10 +567,26 @@ export class Renderer {
 
     // Albedo is colour and wants sRGB decode; the surface map is raw data
     // (normals, roughness, metalness) and must NOT be gamma-converted.
-    this.matTex = upload(albedoImage, true);
-    this.surfTex = upload(surfaceImage, false);
+    return [upload(albedoImage, srgbAlbedo), upload(surfaceImage, false), layers];
+  }
+
+  /** Tiling surface materials for hulls, terrain and wreckage. */
+  setMaterials(albedoImage, surfaceImage, grid = 4) {
+    const [a, b, n] = this._uploadPair(albedoImage, surfaceImage, grid);
+    this.matTex = a; this.surfTex = b;
     this.materialsReady = true;
-    return layers;
+    return n;
+  }
+
+  /**
+   * Baked craft sprites. Independent of setMaterials on purpose: either atlas
+   * can arrive, fail or be absent on its own, and the renderer keeps drawing.
+   */
+  setCraftAtlas(albedoImage, surfaceImage, grid) {
+    const [a, b, n] = this._uploadPair(albedoImage, surfaceImage, grid);
+    this.craftTex = a; this.craftNrmTex = b;
+    this.craftReady = true;
+    return n;
   }
 
   begin() { this.count = 0; }
@@ -529,6 +607,26 @@ export class Renderer {
     d[i + 11] = shape;
     d[i + 12] = mat; d[i + 13] = repeatPx;
     this.count++;
+  }
+
+  /**
+   * A baked craft sprite. `size` is the half-extent, matching the bake's
+   * EXTENT of 1.35 radii, so pass radius * 1.35.
+   */
+  craft(x, y, size, rot, layer, r, g, b, a, accent) {
+    this.push(SHAPE.CRAFT, x, y, size, size, rot, r, g, b, a,
+      accent[0], accent[1], layer, accent[2]);
+  }
+
+  /**
+   * The craft's own alpha mask, offset and near-black.
+   *
+   * The single strongest cue that something is FLYING rather than sitting on
+   * the surface, and the one Sky Force leans on hardest. Cheap: one extra quad
+   * per craft, reusing the atlas already bound.
+   */
+  craftShadow(x, y, size, rot, layer, a) {
+    this.push(SHAPE.SHADOW, x, y, size, size, rot, 0, 0, 0, a, 0, 0, layer, 0);
   }
 
   glow(x, y, radius, r, g, b, a, falloff = 1.6) {
@@ -595,13 +693,22 @@ export class Renderer {
       gl.uniform1f(this.uQuad.u_texOn, this.materialsReady ? 1 : 0);
       gl.uniform1i(this.uQuad.u_mat, 0);
       gl.uniform1i(this.uQuad.u_surf, 1);
+      gl.uniform1f(this.uQuad.u_craftOn, this.craftReady ? 1 : 0);
+      gl.uniform1i(this.uQuad.u_craft, 2);
+      gl.uniform1i(this.uQuad.u_cnrm, 3);
       if (this.materialsReady) {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.matTex);
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.surfTex);
-        gl.activeTexture(gl.TEXTURE0);
       }
+      if (this.craftReady) {
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.craftTex);
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.craftNrmTex);
+      }
+      gl.activeTexture(gl.TEXTURE0);
 
       gl.bindVertexArray(this.vao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuf);

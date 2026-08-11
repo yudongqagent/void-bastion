@@ -454,7 +454,9 @@ js/audio/synth.js     procedural WebAudio
 tools/simulate.mjs    balance harness  — is the progression curve any good?
 tools/headless.mjs    loop smoke test  — does the real game actually run?
 tools/e2e.html        browser test     — does it run in a REAL browser?
-tools/gentex.mjs      material generator — writes the texture atlases
+tools/gentex.mjs      material generator — writes the tiling surface atlases
+tools/genbake.mjs     craft baker      — renders craft sprites with depth
+tools/materials.mjs   the procedural material kit, shared by both
 tools/png.mjs         dependency-free PNG encoder/decoder
 tex/                  generated material atlases (committed)
 tools/devserver.py    no-cache static server for local development
@@ -536,6 +538,45 @@ colour, because the game tints every surface by hull colour and a tile with its
 own strong colour would fight that. And enabling materials must not dim the
 game: measured mean luminance is 0.96x untextured, which is what `MATERIAL_GAIN`
 in the shader is calibrated against.
+
+### Baked craft, and why texture alone was not enough
+
+Materials gave surfaces grain and a real tangent normal, and craft still read as
+flat. The reason is structural, not resolution: Sky Force Reloaded's craft are
+**pre-rendered 3D models**, where panel lines are geometry and shading is baked
+from a mesh. Ours were flat SDF primitives drawn additively in one plane, which
+means a wing crossing a fuselage gets *brighter* where physically it should get
+darker, nothing has height, and nothing casts a shadow.
+
+`tools/genbake.mjs` closes that by rasterising each craft from the same recipes
+into a height field, then deriving everything from it: albedo, tangent normal,
+**ambient occlusion**, and **contact shadows** marched along the light. Those
+last two are precisely what a renderer drawing one primitive at a time cannot
+compute, because they depend on parts other than the one being drawn.
+
+Primitives get rounded cross-sections — a bar becomes a tube, a polygon becomes
+a dome — which is most of the difference between "a shape with a normal map" and
+"an object". Heights come from what a part *is*: centreline pieces are spine and
+fuselage and sit high, outboard pieces are wings and sit low. One function to
+tune rather than 150 numbers across 21 recipes.
+
+The normal is baked; the **shade is not**. Craft still light dynamically, so the
+highlight sweeps as they bank instead of being frozen into the image.
+
+Every flying craft also draws its own alpha mask again, offset and near-black,
+before itself. That drop shadow is the single strongest cue that something is
+flying rather than sitting on the surface, and it is the one Sky Force leans on
+hardest.
+
+```bash
+node tools/genbake.mjs          # writes tex/craft_*.png
+node tools/genbake.mjs --check  # verify the committed bake still matches
+```
+
+`renderCraft` collapses from 4-9 primitives to one sprite, so despite the added
+shadows the frame issues **14% fewer** primitives than the per-part path. The
+per-part path is still there and still correct: it runs whenever the atlas is
+missing or still downloading.
 
 ### The browser test, and why it has to exist
 

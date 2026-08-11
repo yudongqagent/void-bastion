@@ -242,6 +242,10 @@ ui.showHome();
   if (res) {
     try {
       renderer.setMaterials(res.albedo, res.surface);
+      if (res.craftAlbedo && res.craftSurface) {
+        renderer.craftOrder = res.craftOrder;
+        renderer.setCraftAtlas(res.craftAlbedo, res.craftSurface, res.craftGrid);
+      }
       label.textContent = 'MATERIALS READY';
     } catch (err) {
       console.warn('[void-bastion] material upload failed, running untextured:', err);

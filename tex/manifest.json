@@ -1,4 +1,30 @@
 {
   "material": "material.58987dd2.png",
-  "surface": "surface.73c1a18a.png"
+  "surface": "surface.73c1a18a.png",
+  "craft_albedo": "craft_albedo.17f97928.png",
+  "craft_surface": "craft_surface.8a79339f.png",
+  "craftGrid": 5,
+  "craftOrder": [
+    "drone",
+    "darter",
+    "brute",
+    "splitter",
+    "shielder",
+    "sentinel",
+    "gunship",
+    "radial",
+    "lancer",
+    "dread",
+    "wraith",
+    "boss",
+    "mite",
+    "bomber",
+    "juggernaut",
+    "sniper",
+    "warden",
+    "turret",
+    "tank",
+    "warship",
+    "sam"
+  ]
 }
