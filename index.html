@@ -158,6 +158,13 @@
 </div>
 
 <div id="toasts"></div>
+<!-- Texture load progress. Non-blocking: the game is already running behind
+     this, so it is a status line rather than a gate. -->
+<div id="loadBar" class="load-bar" hidden>
+  <div class="load-bar-label"><span id="loadLabel">LOADING MATERIALS</span><span id="loadPct">0%</span></div>
+  <div class="load-bar-track"><i id="loadFill"></i></div>
+</div>
+
 <div id="bootError" class="boot-error" hidden></div>
 
 <script type="module" src="js/main.js"></script>

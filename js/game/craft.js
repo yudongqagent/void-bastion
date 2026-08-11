@@ -272,3 +272,52 @@ export function craftBodies(type) {
   }
   return bodies;
 }
+
+/**
+ * Which material each craft class is built from.
+ *
+ * This is characterisation, not decoration. A Mite is stamped thin sheet and a
+ * Juggernaut is ceramic armour over a steel frame; once the surfaces differ the
+ * two read as different *kinds of thing* rather than as the same polygon at two
+ * sizes. Colour alone was previously carrying all of that.
+ *
+ * `[layer, repeatPx]`. repeatPx is how many world pixels one repeat of the
+ * texture spans, so plating is authored at a physical size rather than as a
+ * fraction of the craft: light fighters get small tight panels, capital hulls
+ * get large ones, and both stay correct at any size on screen.
+ */
+export const CRAFT_MATERIAL = {
+  drone:      [0, 24],   // painted plate — the standard fighter skin
+  darter:     [2, 16],   // carbon weave — light and fast
+  brute:      [4, 30],   // ceramic armour
+  splitter:   [3, 22],   // worn plate — it is meant to look expendable
+  shielder:   [8, 26],   // canopy glass — the emitter is glazed
+  sentinel:   [1, 22],   // brushed steel
+  gunship:    [5, 30],   // military camo
+  radial:     [7, 24],   // dark composite
+  lancer:     [2, 18],   // carbon weave
+  dread:      [4, 40],   // ceramic armour, big plates
+  wraith:     [7, 22],   // dark composite — stealth
+  boss:       [15, 44],  // hazard stripe — unmistakable
+  mite:       [1, 12],   // brushed steel, stamped thin
+  bomber:     [15, 22],  // hazard stripe — it is a walking warning
+  juggernaut: [4, 46],   // ceramic armour, very large plates
+  sniper:     [1, 16],   // brushed steel rail
+  warden:     [10, 20],  // thermal foil — support craft wrapped in blanket
+  turret:     [11, 26],  // concrete emplacement
+  tank:       [5, 26],   // military camo
+  warship:    [6, 34],   // oxidised iron — sea-worn
+  sam:        [11, 26],  // concrete
+};
+
+/** Materials used by things that are not craft. */
+export const MAT = {
+  ISLAND: 12,   // rock
+  SHORE: 13,    // sand
+  BASE: 11,     // concrete
+  HULL_SEA: 3,  // worn plate — grey steel, not the orange of full oxidisation
+  WRECK: 14,    // scorched metal
+  NONE: -1,
+};
+
+export const materialFor = (type) => CRAFT_MATERIAL[type] || CRAFT_MATERIAL.drone;

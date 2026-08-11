@@ -21,6 +21,8 @@ export const GROUND = {
   'void-rift':      { water: [0.072, 0.055, 0.115], land: [0.28, 0.23, 0.38], sand: [0.45, 0.37, 0.56], surf: [0.60, 0.48, 0.88] },
 };
 
+import { MAT } from './craft.js';
+
 export function groundFor(id) { return GROUND[id] || GROUND['outer-reach']; }
 
 /**
@@ -205,15 +207,18 @@ export class Terrain {
             const x = f.x + l.dx, y = f.y + l.dy;
             // Surf ring, beach, then the land plate on top.
             R.poly(x, y, l.r * 1.16, l.sides, l.rot, pal.surf[0], pal.surf[1], pal.surf[2], 0.22);
-            R.polyLit(x, y, l.r * 1.05, l.sides, l.rot, pal.sand[0], pal.sand[1], pal.sand[2], 0.9, 0.5);
-            R.polyLit(x, y, l.r * 0.82, l.sides, l.rot + 0.3, pal.land[0], pal.land[1], pal.land[2], 1, 0.75);
+           R.polyLit(x, y, l.r * 1.05, l.sides, l.rot, pal.sand[0], pal.sand[1], pal.sand[2], 0.9, 0.5,
+              MAT.SHORE, 46);
+            R.polyLit(x, y, l.r * 0.82, l.sides, l.rot + 0.3, pal.land[0], pal.land[1], pal.land[2], 1, 0.75,
+              MAT.ISLAND, 74);
           }
           break;
         }
         case 'base': {
           const rw = f.runway;
           const rx = f.x + rw.dx, ry = f.y;
-          R.polyLit(f.x, f.y, f.w * 0.62, 7, 0.4, pal.land[0], pal.land[1], pal.land[2], 1, 0.6);
+          R.polyLit(f.x, f.y, f.w * 0.62, 7, 0.4, pal.land[0], pal.land[1], pal.land[2], 1, 0.6,
+            MAT.BASE, 64);
           R.slabLit(rx, ry, rw.len * 0.5, f.w * 0.055, rw.rot, 0.20, 0.21, 0.23, 1, 0.4);
           // Centreline dashes read as a runway rather than a grey bar.
           for (let i = -3; i <= 3; i++) {
@@ -222,7 +227,7 @@ export class Terrain {
               rw.len * 0.035, f.w * 0.008, rw.rot, 0.7, 0.7, 0.62, 0.8, 0);
           }
           for (const p of f.pads) {
-            R.slabLit(f.x + p.dx, f.y + p.dy, p.w, p.h, p.rot, 0.30, 0.32, 0.31, 1, 0.85);
+            R.slabLit(f.x + p.dx, f.y + p.dy, p.w, p.h, p.rot, 0.30, 0.32, 0.31, 1, 0.85, MAT.BASE, 30);
             R.slabLit(f.x + p.dx, f.y + p.dy - p.h * 0.45, p.w * 0.8, p.h * 0.25, p.rot,
               0.42, 0.44, 0.42, 1, 0.6);
           }
@@ -232,7 +237,8 @@ export class Terrain {
           for (const sh of f.ships) {
             const x = f.x + sh.dx, y = f.y + sh.dy;
             R.glow(x, y, sh.len * 1.5, pal.surf[0], pal.surf[1], pal.surf[2], 0.16, 2.2);
-            R.slabLit(x, y, sh.len, sh.len * 0.24, Math.PI / 2 + sh.rot, 0.26, 0.28, 0.30, 1, 0.8);
+            R.slabLit(x, y, sh.len, sh.len * 0.24, Math.PI / 2 + sh.rot, 0.26, 0.28, 0.30, 1, 0.8,
+              MAT.HULL_SEA, 22);
             R.slabLit(x, y - sh.len * 0.15, sh.len * 0.3, sh.len * 0.16, Math.PI / 2 + sh.rot,
               0.38, 0.40, 0.42, 1, 0.7);
           }
@@ -242,7 +248,8 @@ export class Terrain {
           for (const rk of f.rocks) {
             const x = f.x + rk.dx, y = f.y + rk.dy;
             R.poly(x, y, rk.r * 1.3, rk.sides, rk.rot, pal.surf[0], pal.surf[1], pal.surf[2], 0.18);
-            R.polyLit(x, y, rk.r, rk.sides, rk.rot, pal.land[0] * 1.1, pal.land[1] * 1.1, pal.land[2] * 1.1, 1, 0.8);
+            R.polyLit(x, y, rk.r, rk.sides, rk.rot, pal.land[0] * 1.1, pal.land[1] * 1.1, pal.land[2] * 1.1, 1, 0.8,
+              MAT.ISLAND, 40);
           }
           break;
         }

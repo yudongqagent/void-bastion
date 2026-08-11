@@ -31,7 +31,7 @@ import {
   bossName, levelName, levelUpgrade, PHASES_PER_LEVEL,
 } from './levels.js';
 import { Terrain, groundFor } from './terrain.js';
-import { craftParts, craftBodies } from './craft.js';
+import { craftParts, craftBodies, materialFor, MAT } from './craft.js';
 
 const TAU = Math.PI * 2;
 
@@ -1424,9 +1424,9 @@ export class Game {
       const k = 0.55 + 0.45 * w.alt;
       const a = Math.min(1, w.alt * 2.2);
       if (w.shape === 'gon') {
-        R.polyLit(w.x, w.y, w.r0 * k, w.sides, w.angle, w.r, w.g, w.b, a, 0.9);
+        R.polyLit(w.x, w.y, w.r0 * k, w.sides, w.angle, w.r, w.g, w.b, a, 0.9, MAT.WRECK, 20);
       } else {
-        R.slabLit(w.x, w.y, w.hw * k, w.hh * k, w.angle, w.r, w.g, w.b, a, 0.85);
+        R.slabLit(w.x, w.y, w.hw * k, w.hh * k, w.angle, w.r, w.g, w.b, a, 0.85, MAT.WRECK, 20);
       }
       if (w.burn > 0) {
         const heat = w.burn * w.alt;
@@ -2588,6 +2588,11 @@ export class Game {
     const hp = Math.max(0, Math.min(1, e.hp / (e.maxHp || 1)));
     const wear = 0.45 + 0.55 * hp;
     const hr = r * wear, hg = g * wear, hb = b * wear;
+    // Badly damaged craft switch to the scorched surface — the material itself
+    // reports condition, alongside the colour darkening it already did.
+    const mm = materialFor(e.type);
+    const mat = hp < 0.34 ? MAT.WRECK : mm[0];
+    const uv = mm[1];
 
     for (const part of craftParts(e.type)) {
       const m = part.m;
@@ -2595,15 +2600,15 @@ export class Game {
         case 'bar':
           R.beamLit(wx(part.a[0], part.a[1]), wy(part.a[0], part.a[1]),
             wx(part.b[0], part.b[1]), wy(part.b[0], part.b[1]), part.w * s,
-            hr * m, hg * m, hb * m, alpha, 0.9);
+            hr * m, hg * m, hb * m, alpha, 0.9, mat, uv);
           break;
         case 'gon':
           R.polyLit(wx(part.p[0], part.p[1]), wy(part.p[0], part.p[1]),
-            part.r * s, part.sides, f + part.rot, hr * m, hg * m, hb * m, alpha, 0.9);
+            part.r * s, part.sides, f + part.rot, hr * m, hg * m, hb * m, alpha, 0.9, mat, uv);
           break;
         case 'slab':
           R.slabLit(wx(part.p[0], part.p[1]), wy(part.p[0], part.p[1]),
-            part.hw * s, part.hh * s, f, hr * m, hg * m, hb * m, alpha, part.shade);
+            part.hw * s, part.hh * s, f, hr * m, hg * m, hb * m, alpha, part.shade, mat, uv);
           break;
         case 'dot':
           R.disc(wx(part.p[0], part.p[1]), wy(part.p[0], part.p[1]), part.r * s,

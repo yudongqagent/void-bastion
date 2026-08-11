@@ -20,7 +20,7 @@ export const SHAPE = {
   SPARK:5,  // elongated glow — debris streaks
 };
 
-const FLOATS_PER_INSTANCE = 12;
+const FLOATS_PER_INSTANCE = 14;
 const MAX_INSTANCES = 24000;
 
 const QUAD_VS = `#version 300 es
@@ -31,6 +31,7 @@ layout(location=3) in float a_rot;
 layout(location=4) in vec4 a_color;
 layout(location=5) in vec2 a_param;
 layout(location=6) in float a_shape;
+layout(location=7) in vec2 a_mat;   // (material layer, world px per repeat); layer < 0 = untextured
 
 uniform vec2 u_res;
 
@@ -39,6 +40,8 @@ out vec4 v_color;
 out vec2 v_param;
 flat out int v_shape;
 flat out float v_rot;
+out vec2 v_uv;
+flat out float v_layer;
 
 void main() {
   v_local = a_corner;
@@ -46,6 +49,13 @@ void main() {
   v_param = a_param;
   v_shape = int(a_shape + 0.5);
   v_rot = a_rot;
+  v_layer = a_mat.x;
+  // uv is derived from WORLD SIZE, not from the quad's normalised corner.
+  // a_mat.y is "world pixels per texture repeat", so texel density is the same
+  // on a small fighter and a large island, and a long thin slab no longer
+  // squashes its texture down to the shape's aspect ratio — which is exactly
+  // what turned convoy hulls into smeared planks.
+  v_uv = (a_corner * 0.5 + 0.5) * (a_size * 2.0) / max(a_mat.y, 1.0);
 
   float c = cos(a_rot), s = sin(a_rot);
   vec2 p = a_corner * a_size;
@@ -63,7 +73,23 @@ in vec4 v_color;
 in vec2 v_param;
 flat in int v_shape;
 flat in float v_rot;
+in vec2 v_uv;
+flat in float v_layer;
 out vec4 outColor;
+
+// Material layers. sampler2DArray rather than an atlas: each material wraps and
+// mips independently, so REPEAT works and coarse mip levels cannot bleed one
+// material into its neighbour the way an atlas would.
+precision highp sampler2DArray;
+uniform sampler2DArray u_mat;    // RGB albedo detail, A ambient occlusion
+uniform sampler2DArray u_surf;   // RG tangent normal, B roughness, A metalness
+uniform float u_texOn;           // 0 until the atlases have loaded
+
+// Albedo was stored divided by this so values above 1.0 survive an 8-bit PNG.
+const float ALBEDO_SCALE = 1.6;
+// Compensates for albedo*AO averaging below 1, so enabling materials does not
+// darken the whole game.
+const float MATERIAL_GAIN = 1.18;
 
 // Fixed world-space key light, up and slightly left. Rotated into each shape's
 // local frame so a craft banking through a turn lights correctly instead of
@@ -78,6 +104,39 @@ float shading(vec2 p, float amount) {
   float lambert = clamp(dot(normalize(p + vec2(1e-4)), L), -1.0, 1.0);
   // Ambient floor so the unlit side reads as shadow, never as a hole.
   return mix(1.0, 0.58 + 0.52 * lambert, amount);
+}
+
+/**
+ * Shading from a real surface normal.
+ *
+ * This is the payoff for the whole material pipeline: a scratch or a panel
+ * seam now catches the light and slides across the hull as the craft banks,
+ * because the highlight comes from the surface itself rather than from the
+ * fragment's distance to the shape's centre.
+ */
+vec3 material(vec3 tint, float amount) {
+  vec3 alb = texture(u_mat, vec3(v_uv, v_layer)).rgb * ALBEDO_SCALE;
+  float ao = texture(u_mat, vec3(v_uv, v_layer)).a;
+  vec4 srf = texture(u_surf, vec3(v_uv, v_layer));
+
+  vec3 N = normalize(vec3((srf.rg * 2.0 - 1.0) * 1.35, 1.0));
+  float c = cos(-v_rot), s = sin(-v_rot);
+  vec2 L2 = vec2(KEY_LIGHT.x * c - KEY_LIGHT.y * s, KEY_LIGHT.x * s + KEY_LIGHT.y * c);
+  vec3 L = normalize(vec3(L2, 0.62));
+
+  float rough = max(srf.b, 0.04);
+  float metal = srf.a;
+  float diff = 0.56 + 0.56 * max(dot(N, L), 0.0);
+
+  // Blinn-Phong: cheap, and at these sizes indistinguishable from anything
+  // more principled. View direction is straight down the z axis.
+  vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
+  float shin = mix(90.0, 5.0, rough);
+  float spec = pow(max(dot(N, H), 0.0), shin) * (1.0 - rough) * mix(0.5, 1.6, metal);
+
+  vec3 base = tint * alb * ao * mix(1.0, diff, amount) * MATERIAL_GAIN;
+  // Dielectrics glint white; metals tint their highlight with their own colour.
+  return base + spec * mix(vec3(1.0), tint, metal) * amount;
 }
 
 const float TAU = 6.28318530718;
@@ -109,7 +168,8 @@ void main() {
     float d = r - 1.0;
     alpha = edge(d);
     if (v_param.y > 0.0) {
-      rgb *= shading(p, v_param.y);
+      if (u_texOn > 0.5 && v_layer >= 0.0) rgb = material(rgb, v_param.y);
+      else rgb *= shading(p, v_param.y);
     } else {
       // Rim light: brighten the outer 25% so unshaded discs read as emissive.
       rgb *= 1.0 + 1.9 * smoothstep(0.68, 1.0, r);
@@ -129,7 +189,9 @@ void main() {
     // same colour once the additive glow was stacked on top.
     if (v_param.y > 0.0) {
       // Solid, lit hull plate with a darker edge line for definition.
-      rgb *= shading(p, v_param.y) * (1.0 - 0.30 * smoothstep(-0.16, 0.0, d));
+      if (u_texOn > 0.5 && v_layer >= 0.0) rgb = material(rgb, v_param.y);
+      else rgb *= shading(p, v_param.y);
+      rgb *= 1.0 - 0.30 * smoothstep(-0.16, 0.0, d);
     } else {
       float rim = smoothstep(-0.42, -0.02, d);
       rgb *= 0.60 + 1.15 * rim;
@@ -139,7 +201,8 @@ void main() {
     float soft = clamp(v_param.x, 0.02, 1.0);
     alpha = (1.0 - smoothstep(1.0 - soft, 1.0, ay)) * (1.0 - smoothstep(0.82, 1.0, ax));
     if (v_param.y > 0.0) {
-      rgb *= shading(vec2(p.x * 0.25, p.y), v_param.y);
+      if (u_texOn > 0.5 && v_layer >= 0.0) rgb = material(rgb, v_param.y);
+      else rgb *= shading(vec2(p.x * 0.25, p.y), v_param.y);
     } else {
       rgb *= 1.0 + 1.3 * (1.0 - ay);
     }
@@ -273,6 +336,10 @@ export class Renderer {
     this.uBlur = uniforms(gl, this.progBlur);
     this.uComposite = uniforms(gl, this.progComposite);
 
+    this.materialsReady = false;
+    this.matTex = null;
+    this.surfTex = null;
+
     this.data = new Float32Array(MAX_INSTANCES * FLOATS_PER_INSTANCE);
     this.count = 0;
 
@@ -316,7 +383,7 @@ export class Renderer {
 
     const stride = FLOATS_PER_INSTANCE * 4;
     // loc, size, byte offset
-    const attrs = [[1, 2, 0], [2, 2, 8], [3, 1, 16], [4, 4, 20], [5, 2, 36], [6, 1, 44]];
+    const attrs = [[1, 2, 0], [2, 2, 8], [3, 1, 16], [4, 4, 20], [5, 2, 36], [6, 1, 44], [7, 2, 48]];
     for (const [loc, size, offset] of attrs) {
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride, offset);
@@ -388,13 +455,69 @@ export class Renderer {
     };
   }
 
+  /**
+   * Upload the two material atlases as texture arrays.
+   *
+   * Each source is a GRID x GRID sheet of square tiles; every tile becomes one
+   * array layer. Slicing is done on a 2D canvas because texSubImage3D from a
+   * sub-rectangle of an image would need UNPACK_SKIP_* juggling for no gain at
+   * load time, and this runs exactly once.
+   *
+   * Safe to never call: the shader keeps u_texOn at 0 and every surface falls
+   * back to the original position-based shading, so a missing or failed
+   * download costs detail and nothing else.
+   */
+  setMaterials(albedoImage, surfaceImage, grid = 4) {
+    const gl = this.gl;
+    const tile = Math.floor(albedoImage.width / grid);
+    const layers = grid * grid;
+
+    const cvs = typeof OffscreenCanvas !== 'undefined'
+      ? new OffscreenCanvas(tile, tile)
+      : Object.assign(document.createElement('canvas'), { width: tile, height: tile });
+    const ctx = cvs.getContext('2d', { willReadFrequently: true });
+
+    const upload = (image, srgb) => {
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
+      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, Math.floor(Math.log2(tile)) + 1,
+        srgb ? gl.SRGB8_ALPHA8 : gl.RGBA8, tile, tile, layers);
+      for (let i = 0; i < layers; i++) {
+        const sx = (i % grid) * tile, sy = Math.floor(i / grid) * tile;
+        ctx.clearRect(0, 0, tile, tile);
+        ctx.drawImage(image, sx, sy, tile, tile, 0, 0, tile, tile);
+        const px = ctx.getImageData(0, 0, tile, tile).data;
+        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, tile, tile, 1,
+          gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(px.buffer));
+      }
+      gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      const aniso = gl.getExtension('EXT_texture_filter_anisotropic');
+      if (aniso) {
+        gl.texParameterf(gl.TEXTURE_2D_ARRAY, aniso.TEXTURE_MAX_ANISOTROPY_EXT,
+          Math.min(8, gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+      }
+      return tex;
+    };
+
+    // Albedo is colour and wants sRGB decode; the surface map is raw data
+    // (normals, roughness, metalness) and must NOT be gamma-converted.
+    this.matTex = upload(albedoImage, true);
+    this.surfTex = upload(surfaceImage, false);
+    this.materialsReady = true;
+    return layers;
+  }
+
   begin() { this.count = 0; }
 
   /**
    * Queue one shape. Colour components may exceed 1.0 — that overshoot is what
    * drives the bloom, so a "hot" core is just a big number, not a special case.
    */
-  push(shape, x, y, sx, sy, rot, r, g, b, a, param = 0, param2 = 0) {
+  push(shape, x, y, sx, sy, rot, r, g, b, a, param = 0, param2 = 0, mat = -1, repeatPx = 48) {
     if (this.count >= MAX_INSTANCES) return;
     const i = this.count * FLOATS_PER_INSTANCE;
     const d = this.data;
@@ -404,6 +527,7 @@ export class Renderer {
     d[i + 5] = r; d[i + 6] = g; d[i + 7] = b; d[i + 8] = a;
     d[i + 9] = param; d[i + 10] = param2;
     d[i + 11] = shape;
+    d[i + 12] = mat; d[i + 13] = repeatPx;
     this.count++;
   }
 
@@ -420,21 +544,21 @@ export class Renderer {
     this.push(SHAPE.POLY, x, y, radius, radius, rot, r, g, b, a, sides);
   }
   /** Same shapes, lit by the key light — for anything meant to read as solid. */
-  polyLit(x, y, radius, sides, rot, r, g, b, a, shade = 1) {
-    this.push(SHAPE.POLY, x, y, radius, radius, rot, r, g, b, a, sides, shade);
+  polyLit(x, y, radius, sides, rot, r, g, b, a, shade = 1, mat = -1, uv = 48) {
+    this.push(SHAPE.POLY, x, y, radius, radius, rot, r, g, b, a, sides, shade, mat, uv);
   }
-  discLit(x, y, radius, r, g, b, a, shade = 1) {
-    this.push(SHAPE.DISC, x, y, radius, radius, 0, r, g, b, a, 0, shade);
+  discLit(x, y, radius, r, g, b, a, shade = 1, mat = -1, uv = 48) {
+    this.push(SHAPE.DISC, x, y, radius, radius, 0, r, g, b, a, 0, shade, mat, uv);
   }
   /** Non-uniform lit quad — hulls, decks, runways. */
-  slabLit(x, y, hw, hh, rot, r, g, b, a, shade = 1) {
-    this.push(SHAPE.BEAM, x, y, hw, hh, rot, r, g, b, a, 0.06, shade);
+  slabLit(x, y, hw, hh, rot, r, g, b, a, shade = 1, mat = -1, uv = 48) {
+    this.push(SHAPE.BEAM, x, y, hw, hh, rot, r, g, b, a, 0.06, shade, mat, uv);
   }
-  beamLit(x1, y1, x2, y2, width, r, g, b, a, shade = 1) {
+  beamLit(x1, y1, x2, y2, width, r, g, b, a, shade = 1, mat = -1, uv = 48) {
     const dx = x2 - x1, dy = y2 - y1;
     const len = Math.hypot(dx, dy) || 0.001;
     this.push(SHAPE.BEAM, (x1 + x2) / 2, (y1 + y2) / 2, len / 2, width,
-      Math.atan2(dy, dx), r, g, b, a, 0.06, shade);
+      Math.atan2(dy, dx), r, g, b, a, 0.06, shade, mat, uv);
   }
   /** Beam between two points, `width` thick, with soft edges. */
   beam(x1, y1, x2, y2, width, r, g, b, a, soft = 0.6) {
@@ -468,6 +592,16 @@ export class Renderer {
 
       gl.useProgram(this.progQuad);
       gl.uniform2f(this.uQuad.u_res, this.cssWidth, this.cssHeight);
+      gl.uniform1f(this.uQuad.u_texOn, this.materialsReady ? 1 : 0);
+      gl.uniform1i(this.uQuad.u_mat, 0);
+      gl.uniform1i(this.uQuad.u_surf, 1);
+      if (this.materialsReady) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.matTex);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.surfTex);
+        gl.activeTexture(gl.TEXTURE0);
+      }
 
       gl.bindVertexArray(this.vao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuf);

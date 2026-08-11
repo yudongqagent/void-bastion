@@ -7,6 +7,7 @@ import { GameState, freshRun } from './game/state.js';
 import { Synth } from './audio/synth.js';
 import { UI } from './ui/hud.js';
 import { fmt } from './game/balance.js';
+import { loadMaterials } from './gl/assets.js';
 
 const sceneCanvas = document.getElementById('scene');
 const overlayCanvas = document.getElementById('overlay');
@@ -213,6 +214,47 @@ if (hadSave) {
 // built, so a half-flown level would be mismatched against the next one.
 ui.onDifficultyChange = () => startNewRun(false);
 ui.showHome();
+
+// --- materials ----------------------------------------------------------------
+//
+// Started AFTER the loop is running, deliberately. The game is fully playable
+// with flat shading, so textures stream in behind a live frame rather than
+// behind a spinner; if they never arrive, nothing breaks.
+(async () => {
+  const bar = document.getElementById('loadBar');
+  const fill = document.getElementById('loadFill');
+  const pct = document.getElementById('loadPct');
+  const label = document.getElementById('loadLabel');
+  let shown = false;
+
+  // Resolved against this module, not the document: the atlases live next to
+  // the code, and a document served from a subpath (or the e2e harness in
+  // tools/) would otherwise look for them in the wrong place.
+  const texBase = new URL('../tex/', import.meta.url).href;
+  const res = await loadMaterials(texBase, (frac) => {
+    // A cache hit completes in one tick; showing a bar for a few milliseconds
+    // is worse than showing none, so it only appears once there is real work.
+    if (!shown && frac < 0.95) { bar.hidden = false; shown = true; }
+    fill.style.width = (frac * 100).toFixed(0) + '%';
+    pct.textContent = (frac * 100).toFixed(0) + '%';
+  });
+
+  if (res) {
+    try {
+      renderer.setMaterials(res.albedo, res.surface);
+      label.textContent = 'MATERIALS READY';
+    } catch (err) {
+      console.warn('[void-bastion] material upload failed, running untextured:', err);
+      label.textContent = 'MATERIALS UNAVAILABLE';
+    }
+  } else if (shown) {
+    label.textContent = 'MATERIALS UNAVAILABLE';
+  }
+  if (shown) {
+    bar.classList.add('done');
+    setTimeout(() => { bar.hidden = true; }, 600);
+  }
+})();
 ui.setZone(game.sector);
 ui.updateSpeedButton();
 ui.soundBtn.classList.toggle('off', state.meta.settings.sound === false);

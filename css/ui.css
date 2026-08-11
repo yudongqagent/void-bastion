@@ -755,6 +755,40 @@ kbd {
 @keyframes toastin { from { opacity: 0; transform: translateY(-12px) scale(0.95); } }
 @keyframes toastout { to { opacity: 0; transform: translateY(-10px); } }
 
+.load-bar {
+  position: fixed;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+  transform: translateX(-50%);
+  width: min(300px, 62vw);
+  z-index: 60;
+  pointer-events: none;
+  transition: opacity .45s ease;
+}
+.load-bar.done { opacity: 0; }
+.load-bar-label {
+  display: flex;
+  justify-content: space-between;
+  font: 600 9px/1 ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: .14em;
+  color: #6f8bb0;
+  margin-bottom: 5px;
+}
+.load-bar-track {
+  height: 2px;
+  background: rgba(120, 170, 230, .16);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.load-bar-track > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #2f7fd0, #4df0ff);
+  box-shadow: 0 0 8px rgba(77, 240, 255, .7);
+  transition: width .18s linear;
+}
+
 .boot-error {
   position: fixed; inset: 0; z-index: 100;
   display: flex; flex-direction: column; align-items: center; justify-content: center;

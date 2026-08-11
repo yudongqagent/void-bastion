@@ -26,7 +26,12 @@
 </style>
 <script>
   // --- fake the two things a headless pane cannot provide ---------------------
-  const VIEW_W = 420, VIEW_H = 780;
+  // Use the real viewport when the pane reports one; only fall back to a phone
+  // size when it reports 0, which is what an offscreen automated pane does.
+  // Pinning unconditionally rendered a 420x780 buffer stretched across a wide
+  // window, which looks like a quality problem but is only a scaling one.
+  const VIEW_W = window.innerWidth || 420;
+  const VIEW_H = window.innerHeight || 780;
   Object.defineProperty(window, 'innerWidth', { get: () => VIEW_W, configurable: true });
   Object.defineProperty(window, 'innerHeight', { get: () => VIEW_H, configurable: true });
   Object.defineProperty(window, 'devicePixelRatio', { get: () => 1, configurable: true });
@@ -81,6 +86,11 @@
 
       const { game: g, state: st, renderer: R } = window.VB;
       const gl = R.gl;
+
+      // 0. Materials. Async, so the caller awaits readiness before run().
+      ok('materials uploaded', R.materialsReady, R.materialsReady ? '' : 'still untextured');
+      ok('material sampler uniforms exist',
+        R.uQuad && R.uQuad.u_mat !== null && R.uQuad.u_surf !== null && R.uQuad.u_texOn !== null);
 
       // 1. Every shader actually compiled and linked in a real GL context.
       for (const k of ['progQuad', 'progBright', 'progBlur', 'progComposite']) {
@@ -168,7 +178,24 @@
   window.E2E.ready = true;
 
   // Auto-run and print a readable report, so the page is useful on its own.
+  // Give the atlases a chance to download and upload before asserting on them.
+  await new Promise((done) => {
+    const t0 = Date.now();
+    const poll = () => {
+      if (window.VB.renderer.materialsReady || Date.now() - t0 > 20000) done();
+      else setTimeout(poll, 100);
+    };
+    poll();
+  });
+
   const r = window.E2E.run();
+
+  // ?visual=1 leaves the game on screen instead of the report, so the frame
+  // that was just simulated can be looked at rather than only asserted on.
+  if (new URLSearchParams(location.search).has('visual')) {
+    window.E2E.result = r;
+    console.log(r.pass ? 'E2E PASS' : 'E2E FAIL', r.stats);
+  } else {
   const rows = r.checks.map((c) =>
     `<tr><td>${c.pass ? '&#10003;' : '&#10007;'}</td><td>${c.name}</td><td>${c.detail}</td></tr>`).join('');
   const stats = Object.entries(r.stats)
@@ -178,4 +205,5 @@
     + (r.pass ? 'E2E PASS' : 'E2E FAIL') + '</pre>'
     + `<table style="color:#cfe3ff;font:13px ui-monospace,monospace;border-spacing:10px 3px">`
     + rows + '<tr><td colspan="3">&nbsp;</td></tr>' + stats + '</table>';
+  }
 </script>

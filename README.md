@@ -454,6 +454,9 @@ js/audio/synth.js     procedural WebAudio
 tools/simulate.mjs    balance harness  — is the progression curve any good?
 tools/headless.mjs    loop smoke test  — does the real game actually run?
 tools/e2e.html        browser test     — does it run in a REAL browser?
+tools/gentex.mjs      material generator — writes the texture atlases
+tools/png.mjs         dependency-free PNG encoder/decoder
+tex/                  generated material atlases (committed)
 tools/devserver.py    no-cache static server for local development
 ```
 
@@ -491,6 +494,48 @@ It exits non-zero on failure. To measure how deep an unaided run actually gets
 ```bash
 node tools/headless.mjs --waves 400 --natural
 ```
+
+### Materials
+
+Surfaces are textured from two generated 1024x1024 atlases, each a 4x4 grid of
+sixteen 256px materials — painted plate, brushed steel, carbon weave, ceramic
+armour, camo, rust, thermal foil, concrete, rock, sand, hazard stripe and the
+rest. `material.png` carries albedo detail plus ambient occlusion;
+`surface.png` carries a tangent normal, roughness and metalness. Both are
+uploaded as `sampler2DArray`, one material per layer, so each tiles and mips
+independently and coarse mip levels cannot bleed neighbours together the way a
+flat atlas would.
+
+They are **generated, not drawn**:
+
+```bash
+node tools/gentex.mjs
+```
+
+Every material is a function built from a shared kit — tileable value-noise
+fBm, Worley cells, jittered panel grids, rivet rows, scratch fields. That is
+what keeps sixteen materials looking like one art direction, and it means
+changing a constant regenerates the whole coherent set. The output is seeded
+and byte-identical run to run, which matters because filenames carry a content
+hash. `--check` regenerates and diffs against what is committed, so the images
+and the generator can never drift apart.
+
+Texel density is specified in **world pixels per repeat**, not as a multiple of
+the shape. A long thin slab would otherwise squash its texture down to its own
+aspect ratio, which is what first turned convoy hulls into smeared planks.
+
+Loading never blocks. The renderer boots untextured and falls back to the
+original position-based shading, and the atlases stream in behind a live frame
+with a progress bar driven by real `Content-Length` bytes. Decoded images go
+into Cache Storage under their hashed names, so repeat visits cost one decode
+(~50 ms) and no network, and a regenerated atlas misses cleanly under its new
+name. If the download fails, the game keeps running with flat shading.
+
+Two lighting notes. Albedo is a *detail multiplier* near 1.0 rather than a
+colour, because the game tints every surface by hull colour and a tile with its
+own strong colour would fight that. And enabling materials must not dim the
+game: measured mean luminance is 0.96x untextured, which is what `MATERIAL_GAIN`
+in the shader is calibrated against.
 
 ### The browser test, and why it has to exist
 
