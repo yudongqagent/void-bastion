@@ -306,14 +306,17 @@ export const UPGRADES = {
 
   maxHull:      { tab: 'defense', label: 'hull', name: 'Hull Plating',    desc: 'Maximum hull',               curve: 'lin', base: 30,    step: 13,   add: 105,   fmt: 'flat' },
   regen:       { tab: 'defense', label: 'regen', name: 'Nanorepair',      desc: 'Hull regenerated per sec',   base: 65,   growth: 1.15,  add: 3.2,   fmt: 'rate' },
-  shieldMax:   { tab: 'defense', label: 'shield', name: 'Deflector',       desc: 'Shield capacity',            base: 70,   growth: 1.14,  add: 30,    fmt: 'flat' },
-  shieldRegen: { tab: 'defense', label: 'sh/s', name: 'Capacitor',       desc: 'Shield recharged per sec',   base: 95,   growth: 1.155, add: 2.4,   fmt: 'rate' },
+  // One card, not two. Deflector and Capacitor were both strictly dominated by
+  // Hull Plating: 0.22 HP per coin on an exponential curve against hull's 1.19
+  // on a linear one, 5.4x worse and widening. Merged and put on a linear curve
+  // so the shield is a real alternative — a smaller pool that comes back on its
+  // own — instead of two cards nobody should ever buy.
+  shieldMax:   { tab: 'defense', label: 'shield', name: 'Deflector',       desc: 'Shield capacity, recharges',  curve: 'lin', base: 68, step: 30, add: 44, addRegen: 1.1, fmt: 'flat' },
   armor:       { tab: 'defense', label: 'armor', name: 'Ablative Mesh',   desc: 'Incoming damage reduction',  base: 220,  growth: 1.19,  add: 0.011, fmt: 'pct', cap: 0.70, maxLevel: 64 },
   thorns:      { tab: 'defense', label: 'thorns', name: 'Reactive Spikes', desc: 'Damage reflected on contact',base: 160,  growth: 1.17,  add: 0.22,  fmt: 'mult' },
 
   coinBonus:   { tab: 'utility', label: 'coins', name: 'Salvage Rig',     desc: 'Coins from every source',    base: 150,  growth: 1.20,  add: 0.075, fmt: 'pctBonus' },
   magnet:      { tab: 'utility', label: 'magnet', name: 'Tractor Field',   desc: 'Pickup collection radius',   base: 150,  growth: 1.19,  add: 11,    fmt: 'flat', maxLevel: 34 },
-  evasion:     { tab: 'utility', label: 'dodge', name: 'Thruster Vanes',  desc: 'Autopilot dodge speed',      base: 240,  growth: 1.23,  add: 0.05,  fmt: 'mult', maxLevel: 20 },
   // Interest turns hoarding into a real option: spend now for power now, or
   // sit on a balance and compound it. Exponential cost and a hard rate cap on
   // purpose — the payout already compounds, and a linear curve on top of that
@@ -407,7 +410,11 @@ export const LAB = {
   labHull:      { name: 'Alloy Science', label: 'hull',    desc: 'Bastion hull & shields',      base: 3,  growth: 1.16, mul: 1.10 },
   labCoins:     { name: 'Market Analysis', label: 'coins',  desc: 'Coin income',                 base: 5,  growth: 1.18, mul: 1.08 },
   labCrit:      { name: 'Neural Targeting', label: 'crit dmg', desc: 'Critical damage',             base: 9,  growth: 1.19, mul: 1.06 },
-  labStartCash: { name: 'Requisition', label: 'start coins',      desc: 'Coins at run start',          base: 4,  growth: 1.22, mul: 2.10, flatBase: 220 },
+  // mul was 2.10 against a cost growth of 1.22 — a ratio of 1.72, meaning every
+  // level was 72% MORE cost-effective than the last. Ten levels bought 367K
+  // starting coins for 29 cores and skipped the entire early game. Every other
+  // track sits between 0.86 and 0.98; this now matches them.
+  labStartCash: { name: 'Requisition', label: 'start coins',      desc: 'Coins at run start',          base: 4,  growth: 1.22, mul: 1.17, flatBase: 260 },
   // Run length grows with depth (a wave's spawn window widens with log(wave)),
   // so without this a late run would be a two-hour sit. Buying time compression
   // is the standard idle-game answer and it is strictly quality-of-life, so it
@@ -696,7 +703,7 @@ export function deriveStats(up, lab, prestigeCount) {
     maxHull:     (300 + U.maxHull.add * lv('maxHull')) * hullMult,
     regen:       (1.5 + U.regen.add * lv('regen')) * hullMult,
     maxShield:   (0 + U.shieldMax.add * lv('shieldMax')) * hullMult,
-    shieldRegen: (2 + U.shieldRegen.add * lv('shieldRegen')) * hullMult,
+    shieldRegen: (2 + U.shieldMax.addRegen * lv('shieldMax')) * hullMult,
     armor:       Math.min(U.armor.cap, U.armor.add * lv('armor')),
     thorns:      U.thorns.add * lv('thorns'),
     // --- weapon systems -------------------------------------------------
@@ -722,7 +729,7 @@ export function deriveStats(up, lab, prestigeCount) {
     // real economy stat, not a convenience: without it, loot drifts off-screen.
     magnet:      92 + U.magnet.add * lv('magnet'),
     // Multiplier on the autopilot's top speed and threat-reaction distance.
-    evasion:     1 + U.evasion.add * lv('evasion'),
+    evasion:     1.35,
     drones:      Math.min(U.drones.cap, lv('drones')),
     lifesteal:   U.lifesteal.add * lv('lifesteal'),
   };

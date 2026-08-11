@@ -28,7 +28,7 @@ function statText(key, stats) {
     range: stats.range, maxHull: stats.maxHull, regen: stats.regen,
     shieldMax: stats.maxShield, shieldRegen: stats.shieldRegen, armor: stats.armor,
     thorns: stats.thorns, coinBonus: stats.coinMult, magnet: stats.magnet,
-    evasion: stats.evasion, drones: stats.drones, lifesteal: stats.lifesteal,
+    drones: stats.drones, lifesteal: stats.lifesteal,
     // Weapon systems. Without these the lookup returned undefined and fmt()
     // rendered every one of them as "∞".
     laser: stats.laserDps, missiles: stats.missileDmg,

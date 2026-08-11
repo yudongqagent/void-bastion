@@ -58,6 +58,8 @@ const SLOWMO_MIN = 0.30;       // time scale at the bottom of the ramp
 // cost ~3 seconds of wall clock every level, which is a toll the idle player
 // never asked to pay.
 const SLOWMO_MAX_SPEED = 2;
+// How long a shield block stays lit. Short: it is punctuation, not a status.
+const SHIELD_FLASH = 0.30;
 
 // Seconds a single wave may run before the survivors start enraging.
 const ENRAGE_AFTER = 100;
@@ -202,6 +204,8 @@ export class Game {
     this.scroll = 0;
     this.scrollDelta = 0;
     this.fxSeed = 0x9e3779b9;
+    this.shieldFlash = 0;
+    this.shieldAng = 0;
     this.scrollSpeed = 150;
     this.layers = [];
     this.nebulae = [];
@@ -828,7 +832,7 @@ export class Game {
       b.crit = crit;
       b.pierce = s.pierce;
       b.life = 2.2;
-      b.radius = crit ? 5 : 3.2;
+      b.radius = 3.2;
       b.fromEnemy = false;
       b.system = null;
       b.hits = b.hits || new Set();
@@ -1125,7 +1129,10 @@ export class Game {
       run.shield -= absorbed;
       dmg -= absorbed;
       this.synth.shieldHit();
-      this.spawnRing(this.ship.x, this.ship.y, 40, COLORS.shield, 0.3);
+      this.shieldFlash = SHIELD_FLASH;
+      this.shieldAng = source
+        ? Math.atan2(source.y - this.ship.y, source.x - this.ship.x)
+        : -Math.PI / 2;
     }
     if (dmg > 0) {
       run.hull -= dmg;
@@ -1467,6 +1474,7 @@ export class Game {
     this.updateParticles(dt);
     this.updateFloaters(dt);
     this.updateRegen(dt);
+    if (this.shieldFlash > 0) this.shieldFlash = Math.max(0, this.shieldFlash - dtRaw);
     this.decayFeedback(dtRaw);
   }
 
@@ -2725,9 +2733,16 @@ export class Game {
         R.glow(hit.x, hit.y, 18, 0.5, 1.4, 1.8, 0.5, 1.7);
       }
       if (last) {
-        R.glow(last.x, last.y, 26 + wob * 2, 0.5, 1.4, 1.8, 0.6, 1.6);
-        R.ring(last.x, last.y, last.radius + 6 + Math.sin(time * 18) * 2, 1.5,
-          0.6, 1.5, 1.9, 0.7);
+        // Where the beam lands: a hot contact point with a small spatter of
+        // sparks. A ring drawn around the target described the TARGET, not the
+        // beam, and sat there as a halo for as long as the laser was firing.
+        R.glow(last.x, last.y, 15 + wob, 0.5, 1.4, 1.8, 0.75, 1.5);
+        R.disc(last.x, last.y, 2.6 + Math.abs(wob) * 0.5, 1.9, 2.0, 2.0, 1);
+        for (let i = 0; i < 2; i++) {
+          const a = time * 26 + i * 3.1;
+          R.spark(last.x + Math.cos(a) * 5, last.y + Math.sin(a) * 5,
+            5, 1.4, a, 0.7, 1.6, 1.9, 0.55);
+        }
       }
       R.glow(x, this.ship.y - 14, 16, 0.5, 1.4, 1.8, 0.55 * lit, 1.7);
     }
@@ -2790,7 +2805,7 @@ export class Game {
       const c = b.fromEnemy
         ? (b.homing > 0 ? [1.7, 0.35, 0.85] : [1.5, 0.5, 0.25])
         : b.system ? COLORS[b.system]
-        : b.crit ? [1.6, 1.3, 0.5] : COLORS.bullet;
+        : COLORS.bullet;
       if (b.missile) {
         const ang = Math.atan2(b.vy, b.vx);
         R.spark(b.x, b.y, 11, 4, ang, c[0], c[1], c[2], 0.95);
@@ -2799,10 +2814,20 @@ export class Game {
           1.7, 1.3, 0.5, 0.75, 1.5);
         continue;
       }
-      const tail = 0.026;
-      R.beam(b.x - b.vx * tail, b.y - b.vy * tail, b.x, b.y, b.radius * 1.5,
+      // One tracer silhouette for the main gun, crit or not. Crits used to be
+      // drawn fat and gold, which read as a different projectile — players saw
+      // their cannon "turn into small missiles" after buying Targeting AI.
+      // A crit is now the same round, hotter and slightly longer.
+      const tail = b.crit ? 0.040 : 0.026;
+      const w = b.crit ? b.radius * 1.15 : b.radius * 1.5;
+      R.beam(b.x - b.vx * tail, b.y - b.vy * tail, b.x, b.y, w,
         c[0], c[1], c[2], 0.85, 0.9);
-      R.glow(b.x, b.y, b.radius * 4.2, c[0], c[1], c[2], 0.6, 1.8);
+      R.glow(b.x, b.y, b.radius * (b.crit ? 3.4 : 4.2), c[0], c[1], c[2], 0.6, 1.8);
+      if (b.crit) {
+        // Incandescent core, so a crit is legible without changing shape.
+        R.beam(b.x - b.vx * tail * 0.5, b.y - b.vy * tail * 0.5, b.x, b.y,
+          b.radius * 0.5, 2.0, 1.95, 1.7, 0.95, 0.6);
+      }
     }
   }
 
@@ -2882,10 +2907,23 @@ export class Game {
       R.ring(x, y, 34 * p2, 2.4, 1.2, 1.5, 1.9, 0.45 + k * 0.35);
       R.glow(x, y, 52, 0.9, 1.3, 1.8, 0.22 * k, 2.1);
     }
-    if (shieldFrac > 0.01) {
-      R.ring(x, y, 30 + Math.sin(time * 2.4) * 1.4, 2.0,
-        COLORS.shield[0], COLORS.shield[1], COLORS.shield[2], 0.25 + shieldFrac * 0.45);
-      R.glow(x, y, 44, COLORS.shield[0], COLORS.shield[1], COLORS.shield[2], shieldFrac * 0.18, 2.4);
+    // The shield is not drawn while it merely exists. A ring that is on screen
+    // for the whole run is chrome; the moment worth showing is the block. On a
+    // hit, hex facets light up on the bearing the damage came from and fade.
+    if (this.shieldFlash > 0) {
+      const k = this.shieldFlash / SHIELD_FLASH;
+      const sc = COLORS.shield;
+      const R0 = 26;
+      for (let i = -2; i <= 2; i++) {
+        const a = this.shieldAng + i * 0.36;
+        const fade = (1 - Math.abs(i) * 0.26) * k;
+        const px = x + Math.cos(a) * R0, py = y + Math.sin(a) * R0;
+        // Each facet is a short flat panel, tangent to the bubble.
+        R.slabLit(px, py, 7.5 * (0.6 + 0.4 * k), 1.4 + 2.2 * k, a + Math.PI / 2,
+          sc[0], sc[1], sc[2], 0.75 * fade, 0);
+      }
+      R.glow(x + Math.cos(this.shieldAng) * R0, y + Math.sin(this.shieldAng) * R0,
+        20 * k, sc[0], sc[1], sc[2], 0.42 * k, 2.0);
     }
 
     // Engine plume, tight and at the nozzle rather than a halo around the hull.

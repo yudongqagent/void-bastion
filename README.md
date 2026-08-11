@@ -600,6 +600,31 @@ way an aircraft is, by construction rather than by matching two pipelines up.
 Placement is generated with the feature from the terrain's own PRNG, so a
 coastline and everything standing on it stay stable as they scroll.
 
+### Upgrade audit
+
+Every upgrade was measured rather than judged. Two useful findings:
+
+**`labStartCash` was a runaway.** Benefit grew at `mul: 2.10` per level against a
+cost growth of `1.22` — a ratio of **1.72**, meaning each level was 72% *more*
+cost-effective than the last. Every other lab track sits between 0.86 and 0.98.
+Ten levels bought 367K starting coins for 29 cores; twenty bought 612 million.
+Now `1.17`, a ratio of 0.96, in line with its peers.
+
+**The two shield upgrades were strictly dominated.** Hull Plating gives 1.19 HP
+per coin on a *linear* curve; Deflector gave 0.22 on an *exponential* one — 5.4x
+worse and widening, with Capacitor on top of that. Merged into one linear-cost
+card granting pool and regen together, so the shield is a real alternative (a
+smaller pool that comes back on its own) rather than two cards nobody should buy.
+
+**`evasion` was removed.** Its only effect was widening the autopilot's
+look-ahead radius — imperceptible, and the name promised a dodge stat it never
+was. The look-ahead bonus is folded into the base pilot, so nothing regressed.
+
+**`thorns` was kept**, against expectation. It looked like a dead stat given the
+autopilot dodges rams, but contact is still 82% of all damage events, and the
+reflect is 6.8% of an enemy's health at wave 100. Measuring stopped a working
+upgrade being deleted on a hunch.
+
 ### No halos
 
 Craft carry no rings. Persistent circles around every airframe read as interface
