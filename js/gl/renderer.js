@@ -174,15 +174,24 @@ vec4 craftSprite(vec3 tint, vec3 accent) {
   vec3 L = normalize(vec3(L2, 0.62));
 
   float rough = max(srf.b, 0.05);
-  float diff = 0.60 + 0.66 * max(dot(N, L), 0.0);
+  float diff = 0.72 + 0.74 * max(dot(N, L), 0.0);
   vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
   float spec = pow(max(dot(N, H), 0.0), mix(80.0, 6.0, rough)) * (1.0 - rough) * 1.1;
+
+  // Rim / fill light. Surfaces turning away from the camera catch a cool sky
+  // bounce, which outlines every curved form — a fuselage tube, a canopy, a
+  // wing leading edge — and is what lifts a dark airframe off a dark sea.
+  // Separation here comes from the SHAPE rather than from a flat brightness
+  // boost, so the craft stays a solid object instead of becoming a lamp.
+  float rim = pow(clamp(length(N.xy), 0.0, 1.0), 2.2);
 
   // Partial tint. Multiplying a dark hull colour over the whole sprite is what
   // reduced every craft to one flat tone; the baked paint scheme has to survive
   // it. Archetype colour still shifts the craft, it no longer replaces it.
   vec3 hue = mix(vec3(1.0), tint * 2.5, 0.55);
-  vec3 rgb = hue * alb.rgb * 1.58 * diff + spec * mix(vec3(1.0), hue, 0.45);
+  vec3 rgb = hue * alb.rgb * 2.05 * diff
+    + spec * mix(vec3(1.0), hue, 0.45)
+    + rim * vec3(0.30, 0.40, 0.54) * 0.95;
   // Running lights: added, not substituted, and only where the mask is strong.
   // Replacing the hull across the whole dot at accent*2.2 blew each craft out
   // into a single glowing ellipse once bloom got hold of it.

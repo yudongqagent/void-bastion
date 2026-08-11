@@ -288,14 +288,18 @@ export const WEAPONS = {
 // idle-game decay: every level is worth buying, each is worth a little less.
 
 export const UPGRADES = {
-  damage:      { tab: 'offense', label: 'dmg', name: 'Plasma Yield',    desc: 'Damage per shot',            curve: 'lin', base: 26,    step: 15,   add: 13,    fmt: 'flat' },
+  // 24 rather than 13: Rail Coil was removed for readability, and it had been
+  // carrying real damage — a shot through three enemies is three hits. Career
+  // depth fell ~20% without it, and +31% damage recovered only part of that,
+  // so its throughput is folded into the base gun
+  // instead of quietly making the game harder.
+  damage:      { tab: 'offense', label: 'dmg', name: 'Plasma Yield',    desc: 'Damage per shot',            curve: 'lin', base: 26,    step: 15,   add: 24,    fmt: 'flat' },
   fireRate:    { tab: 'offense', label: 'rate', name: 'Cycle Rate',      desc: 'Shots per second',           base: 40,   growth: 1.145, add: 0.11,  fmt: 'rate' },
   critChance:  { tab: 'offense', label: 'crit', name: 'Targeting AI',    desc: 'Critical hit chance',        base: 90,   growth: 1.165, add: 0.014, fmt: 'pct', cap: 0.75, maxLevel: 52 },
   critMult:    { tab: 'offense', label: 'crit dmg', name: 'Overcharge',      desc: 'Critical damage multiplier', base: 130,  growth: 1.155, add: 0.16,  fmt: 'mult' },
   // Capped at three barrels. Nine filled the lane edge to edge, which removed
   // any reason to aim or position and turned the screen into a wall of tracer.
   multishot:   { tab: 'offense', label: 'shots', name: 'Split Barrel',    desc: 'Extra projectiles per shot', base: 620,  growth: 1.42,  add: 1,     fmt: 'int', cap: 2, maxLevel: 2 },
-  pierce:      { tab: 'offense', label: 'pierce', name: 'Rail Coil',       desc: 'Enemies pierced per shot',   base: 380,  growth: 1.34,  add: 1,     fmt: 'int', cap: 9, maxLevel: 9 },
 
   // --- weapon systems: level 0 means "not owned yet" ---------------------
   laser:      { tab: 'offense' , tint: 'laser', label: 'laser',    name: 'Pulse Laser',    desc: 'Continuous beam on your target',   curve: 'lin', base: 1300, step: 160, add: 360, fmt: 'flat' },
@@ -673,7 +677,11 @@ export function deriveStats(up, lab, prestigeCount) {
   const damage   = (12 + U.damage.add * lv('damage')) * dmgMult;
   const fireRate = (1.6 + U.fireRate.add * lv('fireRate')) * rateMult;
   const shots    = 1 + Math.min(U.multishot.cap, lv('multishot'));
-  const pierce   = 1 + Math.min(U.pierce.cap, lv('pierce'));
+  // Rail Coil removed: a shot passing through a line of enemies fired every
+  // hit response at once — flash, sparks, knockback, damage numbers — on
+  // targets the player had not aimed at, and made it impossible to read which
+  // impact belonged to which shot. Rounds now always stop on their first hit.
+  const pierce   = 1;
 
   // Effective single-target DPS, used by the simulator and the HUD readout.
   const critFactor = 1 + critChance * (critMult - 1);

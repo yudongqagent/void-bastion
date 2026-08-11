@@ -600,6 +600,22 @@ way an aircraft is, by construction rather than by matching two pipelines up.
 Placement is generated with the feature from the terrain's own PRNG, so a
 coastline and everything standing on it stay stable as they scroll.
 
+### Readability
+
+Craft measured at a **1.55 contrast ratio** against the sea — 63 luminance on a
+38 background, which is what "dark on dark" actually was. Fixed from both sides:
+a rim/fill light in the craft shader, so surfaces turning away from the camera
+catch a cool sky bounce and every curved form gets outlined by its own shape;
+and the water plane taken to 55% of its palette value. Now **2.76**.
+
+The rim is deliberately not stronger. At 1.15 it reached a ratio of 3.3 but
+washed every hull toward the same cool grey, undoing the paint schemes. Legible
+and still individually coloured beats legible and uniform.
+
+Projectiles carry no glow halo. A missile is a body with an exhaust flame and a
+bullet is a tracer; the halos turned both into balls of light that hid the shape
+and hazed everything behind them.
+
 ### Upgrade audit
 
 Every upgrade was measured rather than judged. Two useful findings:
@@ -619,6 +635,13 @@ smaller pool that comes back on its own) rather than two cards nobody should buy
 **`evasion` was removed.** Its only effect was widening the autopilot's
 look-ahead radius — imperceptible, and the name promised a dodge stat it never
 was. The look-ahead bonus is folded into the base pilot, so nothing regressed.
+
+**Rail Coil (pierce) was removed** on readability grounds — one shot passing
+through a line of enemies fired every hit response at once, on targets the
+player never aimed at. It had been carrying real damage though: depth fell ~20%
+without it, and +31% base damage recovered only part of that, so Plasma Yield
+went from +13 to +24 per level. Mean final-run depth across three seeds is 33
+against a 34-36 baseline.
 
 **`thorns` was kept**, against expectation. It looked like a dead stat given the
 autopilot dodges rams, but contact is still 82% of all damage events, and the

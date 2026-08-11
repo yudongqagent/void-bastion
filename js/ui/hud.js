@@ -24,7 +24,7 @@ function statText(key, stats) {
   const u = UPGRADES[key];
   const v = {
     damage: stats.damage, fireRate: stats.fireRate, critChance: stats.critChance,
-    critMult: stats.critMult, multishot: stats.shots, pierce: stats.pierce,
+    critMult: stats.critMult, multishot: stats.shots,
     range: stats.range, maxHull: stats.maxHull, regen: stats.regen,
     shieldMax: stats.maxShield, shieldRegen: stats.shieldRegen, armor: stats.armor,
     thorns: stats.thorns, coinBonus: stats.coinMult, magnet: stats.magnet,

@@ -2456,11 +2456,11 @@ export class Game {
       const blink = p.life < 1.5 && Math.sin(time * 22) < 0 ? 0.3 : 1;
       if (p.kind === 'coin') {
         const c = COLORS.coin;
-        R.glow(p.x, p.y, 15, c[0], c[1], c[2], 0.55 * fade * blink, 1.8);
+        R.glow(p.x, p.y, 9, c[0], c[1], c[2], 0.30 * fade * blink, 1.9);
         R.poly(p.x, p.y, 6.2, 6, p.angle, c[0], c[1], c[2], fade * blink);
       } else {
         const c = COLORS.repair;
-        R.glow(p.x, p.y, 22, c[0], c[1], c[2], 0.6 * fade, 1.7);
+        R.glow(p.x, p.y, 12, c[0], c[1], c[2], 0.35 * fade, 1.8);
         R.beam(p.x - 7, p.y, p.x + 7, p.y, 2.6, c[0], c[1], c[2], fade, 0.6);
         R.beam(p.x, p.y - 7, p.x, p.y + 7, 2.6, c[0], c[1], c[2], fade, 0.6);
       }
@@ -2807,11 +2807,12 @@ export class Game {
         : b.system ? COLORS[b.system]
         : COLORS.bullet;
       if (b.missile) {
+        // A body and an exhaust flame, not a ball of light. The halo made every
+        // projectile a glowing blob and hid the shape entirely.
         const ang = Math.atan2(b.vy, b.vx);
-        R.spark(b.x, b.y, 11, 4, ang, c[0], c[1], c[2], 0.95);
-        R.glow(b.x, b.y, 17, c[0], c[1], c[2], 0.7, 1.7);
-        R.glow(b.x - Math.cos(ang) * 11, b.y - Math.sin(ang) * 11, 9,
-          1.7, 1.3, 0.5, 0.75, 1.5);
+        R.slabLit(b.x, b.y, 2.1, 6.0, ang + Math.PI / 2, c[0] * 0.8, c[1] * 0.8, c[2] * 0.8, 1, 0.9);
+        R.spark(b.x - Math.cos(ang) * 8, b.y - Math.sin(ang) * 8, 7, 2.4, ang,
+          1.7, 1.15, 0.45, 0.85);
         continue;
       }
       // One tracer silhouette for the main gun, crit or not. Crits used to be
@@ -2821,8 +2822,7 @@ export class Game {
       const tail = b.crit ? 0.040 : 0.026;
       const w = b.crit ? b.radius * 1.15 : b.radius * 1.5;
       R.beam(b.x - b.vx * tail, b.y - b.vy * tail, b.x, b.y, w,
-        c[0], c[1], c[2], 0.85, 0.9);
-      R.glow(b.x, b.y, b.radius * (b.crit ? 3.4 : 4.2), c[0], c[1], c[2], 0.6, 1.8);
+        c[0], c[1], c[2], 0.92, 0.75);
       if (b.crit) {
         // Incandescent core, so a crit is legible without changing shape.
         R.beam(b.x - b.vx * tail * 0.5, b.y - b.vy * tail * 0.5, b.x, b.y,

@@ -223,8 +223,14 @@ export class Terrain {
   /** Open water: a base plane plus scrolling swell lines. */
   renderWater(R, pal, time, x0, x1, y0, y1, scroll) {
     const w = x1 - x0, h = y1 - y0;
+    // Deliberately darker than the palette's nominal water. Craft are muted,
+    // low-saturation objects by design; against a bright sea they measured at a
+    // contrast ratio of 1.55, which is why they read as "dark on dark". Taking
+    // the background down is half the fix — the other half is the rim light on
+    // the craft themselves.
+    const WATER_DIM = 0.55;
     R.slabLit((x0 + x1) / 2, (y0 + y1) / 2, w / 2, h / 2, 0,
-      pal.water[0], pal.water[1], pal.water[2], 1, 0);
+      pal.water[0] * WATER_DIM, pal.water[1] * WATER_DIM, pal.water[2] * WATER_DIM, 1, 0);
     // Swell: long faint lines drifting down at the world's speed.
     const spacing = 78;
     const off = (scroll % spacing + spacing) % spacing;
