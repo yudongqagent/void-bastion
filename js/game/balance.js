@@ -22,7 +22,7 @@
 
 // The exponential base of enemy HP. Nearly every other constant in this file
 // is tuned against this one, so it is named rather than inlined.
-export const HP_BASE = 1.036;
+export const HP_BASE = 1.075;
 
 // ---------------------------------------------------------------------------
 // Difficulty
@@ -63,8 +63,19 @@ export function unlockedDifficulty(bestByDiff = []) {
 
 /** Enemy hull for a normal enemy on the given wave. */
 export function enemyHP(wave) {
-  // w^1.75 dominates until ~wave 80, then HP_BASE^w takes over and never stops.
-  return 9 * Math.pow(wave, 1.75) * Math.pow(HP_BASE, wave);
+  // Linear x exponential, deliberately.
+  //
+  // This was 9 * w^1.75 * 1.036^w, and the polynomial made the difficulty curve
+  // INVERT. Enemy health grew 3.5x from level 1 to 2 but only 1.05x from 99 to
+  // 100 — a 65x deceleration — while the player's purchases keep compounding at
+  // a steady rate. So the opening was brutal, the middle was free, and the game
+  // stopped feeling like it was going anywhere.
+  //
+  // Dropping the exponent to 1 and raising the base to 1.075 gives per-level
+  // growth of 2.15x at the start easing to 1.086x deep in, instead of 3.49x
+  // easing to 1.054x. Gentler where it was punishing, and it never stops
+  // climbing where it used to flatten out.
+  return 9 * wave * Math.pow(HP_BASE, wave);
 }
 
 /** How many enemies a wave sends in total. */
@@ -96,7 +107,9 @@ export function enemySpeed(wave) {
 
 /** Contact damage an enemy deals to the bastion hull. */
 export function enemyDamage(wave) {
-  return 6 * Math.pow(wave, 1.25) * Math.pow(1.028, wave);
+  // Same reshape as enemyHP, for the same reason: damage that flattens out is
+  // damage the player outgrows.
+  return 6 * Math.pow(wave, 0.85) * Math.pow(1.045, wave);
 }
 
 /** Coins dropped by one normal kill on this wave, before player multipliers. */

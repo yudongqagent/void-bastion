@@ -172,6 +172,32 @@ wave totals — and therefore the entire prestige curve — are untouched.
 
 ## Design notes
 
+### The difficulty curve was inverted
+
+Enemy health was `9 * w^1.75 * 1.036^w`, and the polynomial made the curve run
+backwards. Measured per-level growth:
+
+```
+level 1 -> 2    x3.485
+level 10 -> 11  x1.246
+level 30 -> 31  x1.099
+level 99 -> 100 x1.054
+```
+
+A 65x deceleration. The polynomial dominates early and vanishes later, while the
+player's purchases keep compounding at a steady rate — so the opening was
+brutal, the middle was free, and the game stopped feeling like it was going
+anywhere. That is the "later levels are easier than earlier levels" report, and
+it is a property of the formula rather than of any single upgrade.
+
+Now `9 * w * 1.075^w`: growth of 2.15x at the start easing to 1.086x deep in.
+Gentler where it was punishing, and it never stops climbing where it used to
+flatten. Enemy damage got the same reshape.
+
+Measured effect: final depth is unchanged (28/30 against a 29/31 baseline) but
+the FIRST run of a career now reaches level 21-22 instead of 15-16 — the opening
+is no longer a wall.
+
 ### Scaling
 
 Everything numeric lives in [`js/game/balance.js`](js/game/balance.js), which

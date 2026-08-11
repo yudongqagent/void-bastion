@@ -30,8 +30,11 @@
   // size when it reports 0, which is what an offscreen automated pane does.
   // Pinning unconditionally rendered a 420x780 buffer stretched across a wide
   // window, which looks like a quality problem but is only a scaling one.
-  const VIEW_W = window.innerWidth || 420;
-  const VIEW_H = window.innerHeight || 780;
+  // The fallback is what almost every capture actually runs at, since this pane
+  // reports innerWidth as 0 — so it needs to be a real handset rather than a
+  // rounded-off guess. 390x844 is an iPhone 14/15 CSS viewport.
+  const VIEW_W = window.innerWidth || 390;
+  const VIEW_H = window.innerHeight || 844;
   Object.defineProperty(window, 'innerWidth', { get: () => VIEW_W, configurable: true });
   Object.defineProperty(window, 'innerHeight', { get: () => VIEW_H, configurable: true });
   Object.defineProperty(window, 'devicePixelRatio', { get: () => 1, configurable: true });

@@ -1101,7 +1101,9 @@ export class Game {
       p.vy = -40 - Math.random() * 70;
       p.life = 9;
       p.angle = Math.random() * TAU;
-      p.spin = (Math.random() - 0.5) * 5;
+      // A steady spin, always in a readable range — a coin turning at 0.1
+      // rad/s does not read as a coin at all.
+      p.spin = (Math.random() < 0.5 ? -1 : 1) * (3.4 + Math.random() * 1.8);
     }
     // Occasional field repair — the pickup that makes a bad patch survivable.
     if (!e.boss && Math.random() < 0.012) this.dropRepair(e.x, e.y);
@@ -1270,16 +1272,30 @@ export class Game {
       0.28, 3.5 + this.fxRandom() * 2.5, COLORS.ship, 0.9, 1);
   }
 
+  /**
+   * A kill, drawn the way the reference draws one: a hard flash, a compact
+   * fireball and a handful of fast shards that are gone quickly.
+   *
+   * The old version threw up to 18 slow, long-lived particles for ANY kill, so
+   * a 12px scout produced nearly the cloud a capital hull did and the lane
+   * filled with drifting dust. Count and speed now scale with the target, and
+   * lifetimes are short — an explosion should punctuate, then get out of the
+   * way of the fight behind it.
+   */
   spawnExplosion(x, y, radius, color, big) {
-    const n = big ? 46 : Math.min(18, 7 + Math.floor(radius * 0.55));
+    const scale = Math.min(1, radius / 22);
+    const n = big ? 30 : Math.round(3 + 7 * scale);
     for (let i = 0; i < n; i++) {
       const a = this.fxRandom() * TAU;
-      const sp = (big ? 120 : 55) + this.fxRandom() * (big ? 340 : 180);
+      const sp = (big ? 200 : 130) + this.fxRandom() * (big ? 380 : 240);
       this.spawnParticle(x, y, Math.cos(a) * sp, Math.sin(a) * sp,
-        0.3 + this.fxRandom() * (big ? 0.7 : 0.35),
-        (big ? 5 : 2.5) + this.fxRandom() * (big ? 9 : 4), color, 0.9, 1);
+        (big ? 0.26 : 0.14) + this.fxRandom() * (big ? 0.30 : 0.14),
+        (big ? 4 : 1.8) + this.fxRandom() * (big ? 6 : 2.4) * scale,
+        color, 0.86, 1);
     }
-    this.spawnParticle(x, y, 0, 0, big ? 0.35 : 0.16, radius * (big ? 3.4 : 1.9), color, 1, 2);
+    // The flash does the work: brief, bright, and sized to the target.
+    this.spawnParticle(x, y, 0, 0, big ? 0.22 : 0.10,
+      radius * (big ? 3.0 : 1.7), color, 1, 2);
   }
 
   /**
@@ -1359,11 +1375,10 @@ export class Game {
       w.spin *= Math.pow(0.5, dt);
       w.alt = Math.max(0, w.life / w.maxLife);
 
-      if (w.burn > 0 && this.fxRandom() < dt * 26) {
-        this.spawnParticle(w.x, w.y, (this.fxRandom() - 0.5) * 30,
-          (this.fxRandom() - 0.5) * 30 - 20, 0.35 + this.fxRandom() * 0.3,
-          2 + this.fxRandom() * 3, [0.55, 0.5, 0.48], 0.9, 1);
-      }
+      // No smoke trail. Six wrecks each emitting 26 particles a second put a
+      // permanent dust cloud over the lane, and it fired for a Mite exactly as
+      // hard as for a Juggernaut. Sky Force keeps debris clean and spends its
+      // particles on the explosion instant instead.
 
       if (w.life <= 0 || w.y > this.y1 + 40) {
         w.active = false;
@@ -1732,10 +1747,12 @@ export class Game {
 
       // Wounded craft stream smoke — condition you can read across the lane.
       const frac = e.hp / (e.maxHp || 1);
-      if (frac < 0.55) {
+      if (frac < 0.34) {
         e.smokeT -= dt;
         if (e.smokeT <= 0) {
-          e.smokeT = 0.05 + frac * 0.14;
+          // Roughly a third of the old rate. A trail should mark out the one
+          // craft that is about to die, not haze the whole screen.
+          e.smokeT = 0.16 + frac * 0.30;
           const dark = frac < 0.28;
           this.spawnParticle(
             e.x + (Math.random() - 0.5) * e.radius, e.y - e.radius * 0.3,
@@ -2459,7 +2476,11 @@ export class Game {
         continue;
       }
 
-      if (p.life <= 0 || p.y > this.y1 + 40) p.active = false;
+      // Coins do not expire. A dropped coin blinking out before you can reach
+      // it reads as a punishment for fighting, and the autopilot cannot always
+      // detour. They now leave only by being collected or by scrolling off the
+      // bottom of the lane with everything else.
+      if (p.y > this.y1 + 40) p.active = false;
     }
   }
 
@@ -2592,17 +2613,40 @@ export class Game {
     const R = this.renderer;
     for (const p of this.pickups.items) {
       if (!p.active) continue;
-      const fade = p.life < 1.5 ? Math.max(0, p.life / 1.5) : 1;
-      const blink = p.life < 1.5 && Math.sin(time * 22) < 0 ? 0.3 : 1;
       if (p.kind === 'coin') {
         const c = COLORS.coin;
-        R.glow(p.x, p.y, 9, c[0], c[1], c[2], 0.30 * fade * blink, 1.9);
-        R.poly(p.x, p.y, 6.2, 6, p.angle, c[0], c[1], c[2], fade * blink);
+        // A real coin, spinning about its vertical axis. The width is the
+        // cosine of the spin angle, so it narrows to an edge and opens back
+        // out — that is the entire illusion, and it is what a flat hexagon
+        // could never do. A slow bob on top keeps it feeling like it is
+        // floating rather than pinned to the water.
+        const spin = p.angle;
+        const w = Math.abs(Math.cos(spin));
+        const bob = Math.sin(time * 2.2 + p.spin) * 1.6;
+        const y = p.y + bob;
+        const R0 = 7.0;
+
+        // Edge-on: a bright sliver of the coin's rim.
+        if (w < 0.16) {
+          R.slabLit(p.x, y, Math.max(0.9, R0 * w), R0, 0,
+            c[0] * 1.15, c[1] * 1.05, c[2] * 0.8, 1, 0);
+        } else {
+          // Face: a squashed disc, with a darker inner field so it reads as
+          // struck metal rather than as a dot of light.
+          R.slabLit(p.x, y, R0 * w, R0, 0, c[0], c[1], c[2] * 0.75, 1, 0.85);
+          R.slabLit(p.x, y, R0 * w * 0.62, R0 * 0.62, 0,
+            c[0] * 0.72, c[1] * 0.62, c[2] * 0.35, 1, 0.7);
+          // Specular streak that slides across the face as it turns.
+          R.slabLit(p.x - R0 * w * 0.34, y - R0 * 0.2, R0 * w * 0.16, R0 * 0.34, 0,
+            1.5, 1.4, 1.0, 0.85 * w, 0);
+        }
+        // A small amount of glow, only enough to make it catch the eye.
+        R.glow(p.x, y, 8, c[0], c[1], c[2], 0.22 + 0.16 * w, 2.0);
       } else {
         const c = COLORS.repair;
-        R.glow(p.x, p.y, 12, c[0], c[1], c[2], 0.35 * fade, 1.8);
-        R.beam(p.x - 7, p.y, p.x + 7, p.y, 2.6, c[0], c[1], c[2], fade, 0.6);
-        R.beam(p.x, p.y - 7, p.x, p.y + 7, 2.6, c[0], c[1], c[2], fade, 0.6);
+        R.glow(p.x, p.y, 12, c[0], c[1], c[2], 0.35, 1.8);
+        R.beam(p.x - 7, p.y, p.x + 7, p.y, 2.6, c[0], c[1], c[2], 1, 0.6);
+        R.beam(p.x, p.y - 7, p.x, p.y + 7, 2.6, c[0], c[1], c[2], 1, 0.6);
       }
     }
   }
