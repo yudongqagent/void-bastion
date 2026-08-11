@@ -32,6 +32,7 @@ import {
 } from './levels.js';
 import { Terrain, groundFor } from './terrain.js';
 import { craftParts, craftBodies, materialFor, MAT } from './craft.js';
+import { makeRoute, routeFor } from './routes.js';
 
 const TAU = Math.PI * 2;
 
@@ -137,7 +138,8 @@ const newEnemy = () => ({
   behavior: 'dive', t: 0, homeX: 0, amp: 0, freq: 0, holdY: 0, face: 0,
   ground: false, hull: null, accent: null, smokeT: 0,
   blast: 0, aura: 0, warded: 0, pack: 1, lastX: null,
-  kx: 0, ky: 0, hitFlashMax: 0.12, hitPower: 0, shieldHit: 0, shieldAng: 0,
+  route: null, wp: 0, routeDir: 1, hunter: false, frame: null, phase2: false, blinkT: 0,
+  hitFlashMax: 0.12, hitPower: 0, shieldHit: 0, shieldAng: 0,
   weapon: null, wcd: 0, elite: false, burst: 0, burstT: 0, spin2: 0, bossDef: null,
 });
 
@@ -219,7 +221,6 @@ export class Game {
     this.freezeBudget = FREEZE_BUDGET;
     this.slowmo = 0;
     this.reducedMotion = false;
-    this._knocks = 0;
 
     this.buffs = {};
     this.singularity = null;
@@ -561,9 +562,11 @@ export class Game {
     e.blast = def.blast || 0;
     e.aura = def.aura || 0;
     e.warded = 0;
-    e.kx = 0; e.ky = 0; e.hitPower = 0; e.hitFlashMax = 0.12;
+    e.hitPower = 0; e.hitFlashMax = 0.12;
     e.shieldHit = 0; e.shieldAng = 0;
     e.bossDef = def.bossDef || null;
+    e.frame = (def.bossDef && def.bossDef.frame) || null;
+    e.phase2 = false;
     e.weapon = def.weapon || null;
     e.wcd = 0.6 + Math.random() * 1.4;
     e.burst = 0; e.burstT = 0; e.spin2 = Math.random() * TAU;
@@ -581,6 +584,18 @@ export class Game {
     e.amp = 40 + Math.random() * 70;
     e.freq = 0.7 + Math.random() * 0.8;
     e.distScale = this.approach / REFERENCE_APPROACH;
+
+    // A committed flight path, decided now and flown regardless of where the
+    // ship goes. Lane comes from where it entered so a group spawned together
+    // naturally flies as a formation; direction is away from the nearer edge,
+    // so routes sweep across the playfield instead of straight off it.
+    const lane = (e.x - this.x0) / Math.max(1, this.fieldW);
+    e.routeDir = lane < 0.5 ? 1 : -1;
+    e.route = null;
+    e.wp = 0;
+    // A minority still hunt. Removing every pursuer takes the pressure out of
+    // the lane entirely; the point is that chasing is the exception now.
+    e.hunter = Math.random() < 0.22;
 
     // Behaviour by archetype. "Most enemies attack by bumping" — dive and
     // swarm both end in a ram, which is why contact damage still drives the
@@ -606,10 +621,19 @@ export class Game {
         : this.y0 + this.fieldH * (0.16 + Math.random() * 0.42);
     } else if (def.type === 'darter' || def.type === 'wraith') {
       e.behavior = 'swarm';
+      e.hunter = Math.random() < 0.55;   // interceptors press harder
     } else if (def.type === 'splitter' || def.type === 'shielder') {
       e.behavior = 'weave';
     } else {
       e.behavior = 'dive';
+    }
+
+    // Attached after the behaviour is settled, since the route pool depends on
+    // it. Ground emplacements, bosses and the hunters fly no route.
+    if (!def.ground && !def.boss && !e.hunter) {
+      e.route = makeRoute(routeFor(e.behavior, Math.random),
+        (e.x - this.x0) / Math.max(1, this.fieldW), e.routeDir);
+      e.wp = 0;
     }
 
     if (def.boss) this.flash([0.35, 0.05, 0.1], 0.5);
@@ -991,20 +1015,9 @@ export class Game {
     e.hitFlashMax = e.hitFlash;
     e.hitPower = Math.max(e.hitPower || 0, frac);
 
-    if (dir && this._knocks < 6) {
-      // Bolted-down things shudder; they do not slide.
-      const solid = e.boss || e.ground ? 0.15 : 1;
-      const shove = Math.min(9, 62 * frac) * solid;
-      if (shove > 0.4) {
-        // A DRAWING offset, deliberately not a change to e.x/e.y. Moving the
-        // real position shoves enemies up-lane, which stretches waves past the
-        // enrage timer and cost ~15% of run depth in the A/B. The player cannot
-        // tell the difference; the simulation very much can.
-        e.kx += dir[0] * shove;
-        e.ky += dir[1] * shove;
-        this._knocks++;
-      }
-    }
+    // No knockback. A cannon round does not visibly shove an aircraft, and
+    // seeing craft recoil away from fire read as wrong however it was drawn.
+    // The hit still registers through flash, sparks and damage numbers.
 
     if (showNumber && amount >= 1 && (frac > 0.06 || Math.random() < 0.06)) {
       this.addFloater(e.x, e.y - e.radius, fmtShort(amount),
@@ -1458,7 +1471,6 @@ export class Game {
       const k = 1 - this.slowmo / SLOWMO_DUR;
       scale *= SLOWMO_MIN + (1 - SLOWMO_MIN) * k * k;
     }
-    this._knocks = 0;
 
     const dt = Math.min(0.05, dtRaw) * scale;
     const { run } = this.state;
@@ -1715,14 +1727,6 @@ export class Game {
       if (e.hitPower > 0) e.hitPower = Math.max(0, e.hitPower - dt * 4);
       if (e.shieldHit > 0) e.shieldHit = Math.max(0, e.shieldHit - dt);
 
-      // Recoil offset springs back fast, so a shove reads as a jolt rather
-      // than as the craft being blown off course.
-      if (e.kx !== 0 || e.ky !== 0) {
-        const decay = Math.pow(0.0004, dt);
-        e.kx *= decay; e.ky *= decay;
-        if (Math.abs(e.kx) < 0.05) e.kx = 0;
-        if (Math.abs(e.ky) < 0.05) e.ky = 0;
-      }
       if (e.phase) e.phaseT += dt * 2.6;
       if (regen > 0 && e.hp < e.maxHp) e.hp = Math.min(e.maxHp, e.hp + e.maxHp * regen * dt);
 
@@ -1763,7 +1767,32 @@ export class Game {
         continue;
       }
 
-      switch (e.behavior) {
+      // A craft on a route flies the route. Steering rather than snapping, so
+      // the airframe's own speed decides how tightly it takes a corner — a
+      // heavy hull arcs wide where an interceptor turns inside it. Deliberately
+      // falls through to the shared tail below, so a routed craft still shoots,
+      // still rams on contact and is still culled when it leaves the lane.
+      if (e.route && e.behavior !== 'ground' && e.behavior !== 'boss') {
+        const wp = e.route[Math.min(e.wp, e.route.length - 1)];
+        const tx = this.x0 + wp[0] * this.fieldW;
+        const ty = this.y0 + wp[1] * this.fieldH;
+        const rdx = tx - e.x, rdy = ty - e.y;
+        const rd = Math.hypot(rdx, rdy) || 1;
+        e.x += (rdx / rd) * speed * dt;
+        e.y += (rdy / rd) * speed * dt;
+        e.face = Math.atan2(-rdx, rdy);
+        if (rd < Math.max(26, speed * dt * 3)) {
+          // Past the last waypoint it holds heading and leaves the world.
+          if (e.wp < e.route.length - 1) e.wp++;
+          else { e.route = null; e.behavior = 'transit'; }
+        }
+      } else switch (e.behavior) {
+        case 'transit': {
+          // Route complete — hold heading and fly out of the world.
+          e.x += Math.sin(-e.face) * speed * dt;
+          e.y += Math.cos(-e.face) * speed * dt;
+          break;
+        }
         case 'ground': {
           // Fixed to the world: it scrolls, it does not pursue.
           e.y += this.scrollSpeed * (this.sector.scrollMult || 1) * dt;
@@ -1828,10 +1857,13 @@ export class Game {
         continue;
       }
 
-      // Anything that slips past is gone — no damage, but no loot either.
-      if (e.y - e.radius > this.y1 + 60 && e.behavior !== 'hover' && !e.boss) {
-        e.active = false;
-      }
+      // Anything that leaves the lane is gone — no damage, but no loot either.
+      // Routes can exit upward or sideways now, not only off the bottom.
+      const out = e.y - e.radius > this.y1 + 60
+        || e.y + e.radius < this.y0 - 220
+        || e.x + e.radius < this.x0 - 200
+        || e.x - e.radius > this.x1 + 200;
+      if (out && e.behavior !== 'hover' && !e.boss) e.active = false;
     }
   }
 
@@ -2052,77 +2084,155 @@ export class Game {
     const ship = this.ship;
     e.fireT -= dt;
 
+    // Second phase at half health. Sky Force bosses shed armour and change
+    // their attack partway through; a boss that does one thing until it dies is
+    // a health bar with decoration. The transition is loud on purpose — it is
+    // the moment the fight is supposed to get worse.
+    if (!e.phase2 && e.hp < e.maxHp * 0.5) {
+      e.phase2 = true;
+      e.fireT = 0.7;
+      this.flash([0.55, 0.12, 0.10], 0.7);
+      this.synth.boss();
+      this.spawnExplosion(e.x, e.y, e.radius * 0.9, [1.6, 0.6, 0.2], true);
+      // Sheds a screen-clearing burst as it goes over.
+      for (let k = 0; k < 18; k++) {
+        this.enemyShot(e, (k / 18) * TAU, { speed: 190, dmg: 0.30, life: 6 });
+      }
+    }
+    const P2 = e.phase2;
+
     switch (pattern) {
       case 'sweep': {
-        // Paces the lane and fires fans across its own heading.
-        e.x = this.cx + Math.sin(e.t * 0.75) * this.fieldW * 0.34;
+        // SIEGE WALKER — advances and retreats in stomps rather than gliding,
+        // firing a wall of fire with one gap that slides across the lane. You
+        // survive by being in the gap, not by being far away.
+        const stomp = Math.floor(e.t * 0.9);
+        const ease = 1 - Math.pow(1 - ((e.t * 0.9) % 1), 3);
+        e.x = this.cx + Math.sin(stomp * 1.7) * this.fieldW * (P2 ? 0.38 : 0.30) * ease;
         if (e.fireT <= 0) {
-          e.fireT = 1.5;
-          const lean = Math.cos(e.t * 0.75) * 0.32;
-          for (let k = -3; k <= 3; k++) {
-            this.enemyShot(e, Math.PI / 2 + lean + k * 0.17, { speed: 250, dmg: 0.30, life: 7 });
+          e.fireT = P2 ? 0.95 : 1.5;
+          const span = P2 ? 7 : 5;
+          // The gap walks one step each volley, so the safe lane keeps moving.
+          const gap = ((Math.floor(e.t * 0.7) % (span * 2)) - span) * 0.17;
+          for (let k = -span; k <= span; k++) {
+            const a = Math.PI / 2 + k * 0.17;
+            if (Math.abs(k * 0.17 - gap) < 0.16) continue;
+            this.enemyShot(e, a, { speed: 250, dmg: 0.30, life: 7 });
           }
         }
         break;
       }
       case 'launch': {
-        // Sends escorts, then covering missiles. Kill the flights or drown.
-        e.x = this.cx + Math.sin(e.t * 0.4) * this.fieldW * 0.26;
+        // STORM CARRIER — the only boss whose threat is other aircraft. It
+        // holds off to one side and keeps launching; ignore the flights and
+        // they accumulate until the lane is unflyable.
+        e.x = this.cx + Math.sin(e.t * 0.4) * this.fieldW * 0.30;
         if (e.fireT <= 0) {
-          e.fireT = 2.6;
-          if (Math.floor(e.t / 2.6) % 2 === 0) {
-            for (let k = -1; k <= 1; k++) this.spawnEscort(e, k * 44, 'darter', 0.035, 'swarm');
+          e.fireT = P2 ? 1.7 : 2.6;
+          const beat = Math.floor(e.t / (P2 ? 1.7 : 2.6)) % 3;
+          if (beat === 0) {
+            const n = P2 ? 3 : 2;
+            for (let k = -n; k <= n; k += 2) this.spawnEscort(e, k * 40, 'darter', 0.035, 'swarm');
             this.synth.ability();
-          } else {
+          } else if (beat === 1) {
             for (let k = -1; k <= 1; k++) {
               const b = this.enemyShot(e, Math.PI / 2 + k * 0.3, { speed: 150, dmg: 0.55, life: 8 });
               b.homing = 1.5;
+            }
+          } else if (P2) {
+            // Phase two adds a point-defence curtain under the deck.
+            for (let k = -4; k <= 4; k++) {
+              this.enemyShot(e, Math.PI / 2 + k * 0.12, { speed: 320, dmg: 0.22, life: 5 });
             }
           }
         }
         break;
       }
       case 'lance': {
-        // Charges rail columns. They telegraph, so the lane stays readable.
-        e.x = this.cx + Math.sin(e.t * 0.5) * this.fieldW * 0.3;
+        // RAIL FORTRESS — nearly stationary, and kills by denying space. The
+        // columns telegraph, so this is a positioning fight: it is asking where
+        // you intend to be in a second, not where you are.
+        e.x += (this.cx + Math.sin(e.t * 0.32) * this.fieldW * 0.22 - e.x) * 0.9 * dt;
         if (e.fireT <= 0) {
-          e.fireT = 3.4;
-          for (const off of [-1, 1]) {
-            this.beams.push({ x: e.x + off * 62, y: e.y, t: 0, dmg: e.dmg * 0.5, owner: null, w: 30 });
+          e.fireT = P2 ? 2.1 : 3.4;
+          if (P2) {
+            // Phase two tracks: one column lands where the ship IS, the others
+            // bracket it, so standing still is fatal.
+            for (const off of [-1, 0, 1]) {
+              this.beams.push({ x: ship.x + off * 78, y: e.y, t: 0,
+                dmg: e.dmg * 0.5, owner: null, w: 28 });
+            }
+          } else {
+            for (const off of [-1, 1]) {
+              this.beams.push({ x: e.x + off * 62, y: e.y, t: 0,
+                dmg: e.dmg * 0.5, owner: null, w: 30 });
+            }
           }
         }
         break;
       }
       case 'swarm': {
-        // Spits splitters that multiply if ignored.
+        // HIVE BARGE — drifts low and slow and floods the lane with things that
+        // divide. The pressure is cumulative: every second you spend shooting
+        // the barge is a second the brood is multiplying.
         e.x = this.cx + Math.sin(e.t * 0.6) * this.fieldW * 0.28;
+        e.y = this.y0 + this.fieldH * (0.20 + Math.sin(e.t * 0.4) * 0.05);
         if (e.fireT <= 0) {
-          e.fireT = 2.2;
+          e.fireT = P2 ? 1.4 : 2.2;
           for (let k = -1; k <= 1; k += 2) this.spawnEscort(e, k * 30, 'splitter', 0.05, 'weave');
+          if (P2) {
+            this.spawnEscort(e, 0, 'mite', 0.05, 'swarm');
+            // A slow bomb curtain underneath, to stop the lane being camped.
+            for (let k = -2; k <= 2; k++) {
+              this.enemyShot(e, Math.PI / 2 + k * 0.26, { speed: 120, dmg: 0.34, life: 9 });
+            }
+          }
         }
         break;
       }
       case 'burst': {
-        // Nearly stationary; expanding rings you have to be outside of.
-        e.x = this.cx + Math.sin(e.t * 0.18) * this.fieldW * 0.1;
+        // VOID MONOLITH — does not fly, it relocates. Blinks to a new station
+        // and detonates a ring from wherever it lands, so the safe ground is
+        // never where you were standing a second ago.
+        e.blinkT = (e.blinkT || 0) - dt;
+        if (e.blinkT <= 0) {
+          e.blinkT = P2 ? 2.2 : 3.6;
+          this.spawnExplosion(e.x, e.y, e.radius * 0.7, [0.8, 0.4, 1.5], false);
+          e.x = this.x0 + this.fieldW * (0.22 + this.fxRandom() * 0.56);
+          e.y = this.y0 + this.fieldH * (0.14 + this.fxRandom() * 0.16);
+          this.spawnRing(e.x, e.y, e.radius * 2.4, [0.8, 0.4, 1.5], 0.35);
+        }
         if (e.fireT <= 0) {
-          e.fireT = 2.4;
+          e.fireT = P2 ? 1.5 : 2.4;
           e.spin2 += 0.28;
-          for (let k = 0; k < 14; k++) {
-            this.enemyShot(e, e.spin2 + (k / 14) * TAU, { speed: 190, dmg: 0.26, life: 9 });
+          const n = P2 ? 20 : 14;
+          for (let k = 0; k < n; k++) {
+            this.enemyShot(e, e.spin2 + (k / n) * TAU, { speed: 190, dmg: 0.26, life: 9 });
+          }
+          if (P2) {
+            // A counter-rotating second ring: the gaps close as they expand.
+            for (let k = 0; k < n; k++) {
+              this.enemyShot(e, -e.spin2 * 1.4 + (k / n) * TAU,
+                { speed: 128, dmg: 0.24, life: 10 });
+            }
           }
           this.spawnRing(e.x, e.y, 130, def ? def.accent : [1.4, 0.5, 1.4], 0.5);
         }
         break;
       }
       default: {
-        // 'spiral' — rotating batteries, plus aimed shells to punish camping.
+        // HARBOUR GUN — an emplacement, so it barely moves. Its batteries
+        // rotate continuously and the spiral arms are the fight: you read the
+        // rotation and travel with the gap rather than across it.
         e.x = this.cx + Math.sin(e.t * 0.3) * this.fieldW * 0.2;
         if (e.fireT <= 0) {
-          e.fireT = 1.15;
-          e.spin2 += 0.42;
-          for (let k = 0; k < 6; k++) {
-            this.enemyShot(e, e.spin2 + (k / 6) * TAU, { speed: 215, dmg: 0.26, life: 8 });
+          e.fireT = P2 ? 0.78 : 1.15;
+          // Phase two reverses the spin, which inverts every gap the player has
+          // just learned to read.
+          e.spin2 += P2 ? -0.52 : 0.42;
+          const arms = P2 ? 8 : 6;
+          for (let k = 0; k < arms; k++) {
+            this.enemyShot(e, e.spin2 + (k / arms) * TAU, { speed: 215, dmg: 0.26, life: 8 });
           }
           if (Math.floor(e.t) % 3 === 0) {
             this.enemyShot(e, Math.atan2(ship.y - e.y, ship.x - e.x),
@@ -2547,7 +2657,8 @@ export class Game {
     const wear = 0.45 + 0.55 * hp;
 
     if (R.craftReady) {
-      const layer = this.craftLayer(e.type);
+      // Bosses carry a per-encounter frame; everything else is its own type.
+      const layer = this.craftLayer(e.frame || e.type);
       if (layer >= 0) {
         // EXTENT in the baker: the tile spans 1.35 radii each way.
         const size = s * 1.35;
@@ -2670,11 +2781,6 @@ export class Game {
 
       const hpFrac = Math.max(0, e.hp / e.maxHp);
 
-      // Shift into recoil space for the draw, then put it straight back. Every
-      // other system — collision, targeting, spawning — sees the true position.
-      const trueX = e.x, trueY = e.y;
-      e.x += e.kx; e.y += e.ky;
-
       R.glow(e.x, e.y, e.radius * 2.2, r, g, b, 0.09 * alpha, 2.3);
       this.renderCraft(e, r, g, b, alpha);
 
@@ -2738,7 +2844,6 @@ export class Game {
         R.slabLit(e.x - w * (1 - hpFrac), e.y - e.radius * 1.5, w * hpFrac, 1.8, 0,
           1.7, 0.45, 0.25, 1, 0);
       }
-      e.x = trueX; e.y = trueY;
     }
   }
 

@@ -34,9 +34,9 @@ function makeIsland(rng, x, w) {
   const n = 3 + ((rng() * 3) | 0);
   for (let i = 0; i < n; i++) {
     lobes.push({
-      dx: (rng() - 0.5) * w * 0.9,
-      dy: (rng() - 0.5) * w * 0.7,
-      r: w * (0.28 + rng() * 0.32),
+      dx: (rng() - 0.5) * w * 0.8,
+      dy: (rng() - 0.5) * w * 0.65,
+      r: w * (0.24 + rng() * 0.24),
       sides: 6 + ((rng() * 3) | 0),
       rot: rng() * TAU,
     });
@@ -178,7 +178,11 @@ export class Terrain {
 
     const width = x1 - x0;
     while (this.nextY > y0 - 1400) {
-      const w = width * (0.30 + this.rng() * 0.55);
+      // Scaled off the NARROW side of the lane, and capped. At 0.30-0.85 of a
+      // phone's 390px width, plus lobes reaching 0.6w beyond centre, a single
+      // island covered the entire screen and the game stopped reading as
+      // flying over an archipelago and started reading as flying over land.
+      const w = Math.min(width, 420) * (0.22 + this.rng() * 0.34);
       const build = BUILDERS[(this.rng() * BUILDERS.length) | 0];
       const f = build(this.rng.bind(this), x0 + this.rng() * width, w);
       f.y = this.nextY;

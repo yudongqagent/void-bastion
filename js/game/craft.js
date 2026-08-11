@@ -103,6 +103,14 @@ export const CRAFT_MATERIAL = {
   pier:       [0, 22],   // painted plate over piles
   depot:      [11, 26],  // concrete
   mast:       [1, 18],   // brushed steel lattice
+
+  // Bosses. Heavier plating, bigger panels — they should read as capital scale.
+  bossHarbour:  [4, 52],   // ceramic armour
+  bossWalker:   [5, 44],   // military camo
+  bossCarrier:  [3, 48],   // worn plate — a working deck
+  bossFortress: [1, 46],   // brushed steel
+  bossHive:     [6, 42],   // oxidised iron
+  bossMonolith: [7, 40],   // dark composite
 };
 
 /** Materials used by things that are not craft. */

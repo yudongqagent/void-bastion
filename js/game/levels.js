@@ -29,33 +29,33 @@ export const firstStepOfLevel = (wave) => phaseOf(wave) === 1;
  */
 export const BOSSES = [
   {
-    id: 'harbour', name: 'HARBOUR GUN', pattern: 'spiral',
-    hp: 1.00, radius: 30, accent: [1.60, 0.45, 0.25],
+    id: 'harbour', name: 'HARBOUR GUN', pattern: 'spiral', frame: 'bossHarbour',
+    hp: 1.7, radius: 40, accent: [1.60, 0.45, 0.25],
     tell: 'Rotating batteries — keep moving around it.',
   },
   {
-    id: 'walker', name: 'SIEGE WALKER', pattern: 'sweep',
-    hp: 1.10, radius: 32, accent: [1.35, 0.85, 0.25],
+    id: 'walker', name: 'SIEGE WALKER', pattern: 'sweep', frame: 'bossWalker',
+    hp: 1.85, radius: 42, accent: [1.35, 0.85, 0.25],
     tell: 'Sweeping volleys — slip through the gaps.',
   },
   {
-    id: 'carrier', name: 'STORM CARRIER', pattern: 'launch',
-    hp: 1.25, radius: 36, accent: [0.45, 0.95, 1.60],
+    id: 'carrier', name: 'STORM CARRIER', pattern: 'launch', frame: 'bossCarrier',
+    hp: 2.0, radius: 46, accent: [0.45, 0.95, 1.60],
     tell: 'Launches escorts — kill the flights first.',
   },
   {
-    id: 'fortress', name: 'RAIL FORTRESS', pattern: 'lance',
-    hp: 1.15, radius: 33, accent: [1.55, 0.35, 0.55],
+    id: 'fortress', name: 'RAIL FORTRESS', pattern: 'lance', frame: 'bossFortress',
+    hp: 1.95, radius: 43, accent: [1.55, 0.35, 0.55],
     tell: 'Charges rail columns — watch the sight-lines.',
   },
   {
-    id: 'hive', name: 'HIVE BARGE', pattern: 'swarm',
-    hp: 1.20, radius: 34, accent: [0.45, 1.45, 0.60],
+    id: 'hive', name: 'HIVE BARGE', pattern: 'swarm', frame: 'bossHive',
+    hp: 2.1, radius: 44, accent: [0.45, 1.45, 0.60],
     tell: 'Spits splitters — do not let them stack.',
   },
   {
-    id: 'monolith', name: 'VOID MONOLITH', pattern: 'burst',
-    hp: 1.35, radius: 38, accent: [0.85, 0.50, 1.60],
+    id: 'monolith', name: 'VOID MONOLITH', pattern: 'burst', frame: 'bossMonolith',
+    hp: 2.4, radius: 46, accent: [0.85, 0.50, 1.60],
     tell: 'Ring bursts — stay off the detonation lines.',
   },
 ];

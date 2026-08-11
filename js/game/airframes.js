@@ -383,8 +383,6 @@ export const AIRFRAMES = {
 };
 
 /** Flattened, mirrors resolved. Every consumer reads this. */
-export const AIRFRAME_PARTS = Object.fromEntries(
-  Object.entries(AIRFRAMES).map(([k, v]) => [k, expand(v)]));
 
 // --- ground structures ----------------------------------------------------------
 //
@@ -504,9 +502,9 @@ const depot = [
 
 const mast = [
   plate({ p: [0, -0.62], hw: 0.24, hh: 0.14, h: 0.18, m: 0.85 }),
-  plate({ p: [0, -0.06], hw: 0.055, hh: 0.60, h: 0.72, m: 1.0 }),
-  plate({ p: [0, 0.10], hw: 0.30, hh: 0.035, h: 0.62, m: 0.9 }),
-  plate({ p: [0, 0.36], hw: 0.22, hh: 0.030, h: 0.68, m: 0.9 }),
+  plate({ p: [0, -0.06], hw: 0.085, hh: 0.60, h: 0.72, m: 1.0 }),
+  plate({ p: [0, 0.10], hw: 0.34, hh: 0.055, h: 0.62, m: 0.9 }),
+  plate({ p: [0, 0.36], hw: 0.26, hh: 0.050, h: 0.68, m: 0.9 }),
   dome({ p: [0, 0.58], r: 0.09, h: 0.78, m: 1.05 }),
   lamp([0, 0.62], 0.045, 3.0),
   lamp([0.30, 0.10], 0.028, 1.8),
@@ -521,3 +519,112 @@ export const STRUCTURES = {
 /** Structures share the airframe pipeline: same expansion, same bake, same atlas. */
 export const STRUCTURE_PARTS = Object.fromEntries(
   Object.entries(STRUCTURES).map(([k, v]) => [k, expand(v)]));
+
+// --- bosses ---------------------------------------------------------------------
+//
+// Every boss used the same silhouette and the same sine-wave pace, differing
+// only in what came out of it. Six encounters that looked identical. These are
+// built to read as different MACHINES at a glance — a gun fortress, a walker, a
+// carrier, a rail platform, a hive barge and something that is not built at all.
+
+const bossHarbour = [
+  // Squat armoured emplacement: a wide base ring and one enormous turret.
+  plate({ p: [0, 0], hw: 0.86, hh: 0.62, h: 0.28, m: 0.9 }),
+  plate({ p: [0.62, 0.34], hw: 0.24, hh: 0.20, h: 0.40, m: 0.95, mirror: true }),
+  dome({ p: [0, 0.02], r: 0.52, h: 0.62, m: 1.05 }),
+  dome({ p: [0, 0.06], r: 0.30, h: 0.78, m: 1.1 }),
+  barrel({ p: [0.10, 0.30], len: 0.86, r: 0.075, h: 0.80, mirror: true }),
+  dome({ p: [0.66, -0.34], r: 0.16, h: 0.46, mirror: true }),
+  barrel({ p: [0.66, -0.20], len: 0.34, r: 0.045, h: 0.50, mirror: true }),
+  lamp([0, 0.44], 0.07, 2.6),
+  lamp([0.86, 0.50], 0.05, 2.0),
+  lamp([-0.86, 0.50], 0.05, 2.0),
+];
+
+const bossWalker = [
+  // Legged siege platform. The legs are the read — nothing else in the game
+  // has limbs.
+  plate({ p: [0, 0.10], hw: 0.50, hh: 0.42, h: 0.52, m: 1.0 }),
+  canopy({ p: [0, 0.34], rx: 0.24, ry: 0.16, h: 0.66 }),
+  ...[0.62, 0.10, -0.42].flatMap((y, i) => [
+    plate({ p: [0.62, y], hw: 0.10, hh: 0.30, rot: 0.28 - i * 0.2, h: 0.30, m: 0.9, mirror: true }),
+    plate({ p: [0.92, y - 0.16], hw: 0.08, hh: 0.26, rot: -0.34, h: 0.20, m: 0.82, mirror: true }),
+  ]),
+  dome({ p: [0.30, 0.34], r: 0.15, h: 0.60, mirror: true }),
+  barrel({ p: [0.30, 0.48], len: 0.40, r: 0.05, h: 0.64, mirror: true }),
+  plate({ p: [0, -0.44], hw: 0.34, hh: 0.20, h: 0.42, m: 0.92 }),
+  lamp([0, 0.50], 0.065, 2.4),
+  lamp([0.94, -0.60], 0.045, 1.8),
+  lamp([-0.94, -0.60], 0.045, 1.8),
+];
+
+const bossCarrier = [
+  // A flight deck. Long, flat, with an offset island and open launch bays.
+  loft([[1.05, 0.26, 0.30], [0.50, 0.44, 0.38], [-0.20, 0.46, 0.38],
+        [-0.92, 0.30, 0.28]], { m: 0.95 }),
+  plate({ p: [0, 0.10], hw: 0.40, hh: 0.86, h: 0.30, m: 0.88 }),   // deck
+  plate({ p: [0.46, 0.20], hw: 0.16, hh: 0.30, h: 0.66, m: 1.05 }), // island
+  fin({ p: [0.46, 0.44], len: 0.34, hw: 0.035, sweep: 0, h: 0.86 }),
+  dome({ p: [0.46, 0.30], r: 0.11, h: 0.72 }),
+  // Launch bays, cut into the deck.
+  plate({ p: [-0.16, 0.44], hw: 0.13, hh: 0.16, h: 0.18, m: 0.7 }),
+  plate({ p: [-0.16, 0.02], hw: 0.13, hh: 0.16, h: 0.18, m: 0.7 }),
+  plate({ p: [-0.16, -0.40], hw: 0.13, hh: 0.16, h: 0.18, m: 0.7 }),
+  nacelle({ p: [0.24, -0.86], len: 0.34, r: 0.11, mirror: true }),
+  lamp([-0.16, 0.44], 0.05, 2.6),
+  lamp([-0.16, 0.02], 0.05, 2.6),
+  lamp([-0.16, -0.40], 0.05, 2.6),
+  lamp([0.46, 0.62], 0.045, 2.2),
+];
+
+const bossFortress = [
+  // Armoured wedge built around two rail barrels that run its whole length.
+  loft([[1.00, 0.20, 0.28], [0.40, 0.56, 0.50], [-0.30, 0.60, 0.52],
+        [-0.98, 0.34, 0.30]], { m: 1.05 }),
+  plate({ p: [0, 0.10], hw: 0.52, hh: 0.44, h: 0.56, m: 1.0 }),
+  barrel({ p: [0.26, 0.20], len: 1.05, r: 0.085, h: 0.72, mirror: true }),
+  plate({ p: [0.26, -0.10], hw: 0.13, hh: 0.26, h: 0.62, m: 0.95, mirror: true }),
+  canopy({ p: [0, -0.16], rx: 0.20, ry: 0.16, h: 0.70 }),
+  fin({ p: [0.44, -0.52], len: 0.34, hw: 0.055, sweep: 0.10, h: 0.62, mirror: true }),
+  nacelle({ p: [0.20, -0.82], len: 0.34, r: 0.115, mirror: true }),
+  lamp([0.26, 0.86], 0.05, 3.0),
+  lamp([-0.26, 0.86], 0.05, 3.0),
+  lamp([0, -0.30], 0.055, 2.2),
+];
+
+const bossHive = [
+  // Organic barge: a bulbous hull studded with brood pods. No hard edges.
+  loft([[0.92, 0.30, 0.40], [0.30, 0.60, 0.62], [-0.34, 0.58, 0.58],
+        [-0.94, 0.32, 0.34]], { m: 1.0 }),
+  dome({ p: [0, 0.16], r: 0.40, h: 0.74, m: 1.05 }),
+  ...[[0.44, 0.40], [0.52, -0.06], [0.40, -0.50], [0.20, 0.62]].map(([px, py]) =>
+    dome({ p: [px, py], r: 0.17, h: 0.56, m: 0.95, mirror: true })),
+  dome({ p: [0, -0.52], r: 0.22, h: 0.58, m: 0.95 }),
+  nacelle({ p: [0.30, -0.84], len: 0.28, r: 0.10, mirror: true }),
+  lamp([0, 0.34], 0.075, 2.8),
+  lamp([0.52, 0.40], 0.045, 2.2),
+  lamp([-0.52, 0.40], 0.045, 2.2),
+  lamp([0.60, -0.06], 0.045, 2.2),
+  lamp([-0.60, -0.06], 0.045, 2.2),
+];
+
+const bossMonolith = [
+  // Not built: a floating prism with orbiting shards. Deliberately the only
+  // boss with no nacelles, no canopy and no guns you can point at.
+  plate({ p: [0, 0], hw: 0.34, hh: 0.90, h: 0.86, m: 1.05 }),
+  plate({ p: [0, 0.36], hw: 0.52, hh: 0.24, rot: 0.4, h: 0.70, m: 1.0 }),
+  plate({ p: [0, -0.36], hw: 0.52, hh: 0.24, rot: -0.4, h: 0.70, m: 1.0 }),
+  dome({ p: [0, 0], r: 0.26, h: 0.98, m: 1.1 }),
+  plate({ p: [0.66, 0.10], hw: 0.12, hh: 0.30, rot: 0.5, h: 0.46, m: 0.9, mirror: true }),
+  lamp([0, 0], 0.10, 3.2),
+  lamp([0.72, 0.16], 0.05, 2.4),
+  lamp([-0.72, 0.16], 0.05, 2.4),
+  orbit({ n: 4, r: 1.05, size: 0.08, speed: 0.8, m: 1 }),
+];
+
+export const BOSS_FRAMES = {
+  bossHarbour, bossWalker, bossCarrier, bossFortress, bossHive, bossMonolith,
+};
+
+export const AIRFRAME_PARTS = Object.fromEntries(
+  Object.entries({ ...AIRFRAMES, ...BOSS_FRAMES }).map(([k, v]) => [k, expand(v)]));

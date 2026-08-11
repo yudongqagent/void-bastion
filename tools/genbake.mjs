@@ -270,6 +270,15 @@ const SCHEMES = {
   juggernaut: { base: [0.35, 0.34, 0.37], deck: [0.64, 0.63, 0.68], shade: [0.10, 0.10, 0.12], mark: [0.90, 0.40, 1.10] },
   boss:       { base: [0.30, 0.29, 0.30], deck: [0.58, 0.56, 0.56], shade: [0.08, 0.08, 0.09], mark: [1.30, 0.55, 0.12] },
 
+  // Each boss gets its own tone family so the level's antagonist is recognisable
+  // before it has fired anything.
+  bossHarbour:  { base: [0.42, 0.40, 0.36], deck: [0.72, 0.68, 0.60], shade: [0.10, 0.10, 0.09], mark: [1.30, 0.42, 0.16] },
+  bossWalker:   { base: [0.36, 0.40, 0.28], deck: [0.62, 0.68, 0.46], shade: [0.09, 0.11, 0.08], mark: [1.25, 0.72, 0.14] },
+  bossCarrier:  { base: [0.38, 0.41, 0.45], deck: [0.66, 0.70, 0.76], shade: [0.10, 0.11, 0.13], mark: [0.40, 0.90, 1.25] },
+  bossFortress: { base: [0.44, 0.45, 0.47], deck: [0.78, 0.80, 0.83], shade: [0.11, 0.11, 0.12], mark: [1.30, 0.30, 0.40] },
+  bossHive:     { base: [0.34, 0.30, 0.24], deck: [0.60, 0.52, 0.38], shade: [0.09, 0.08, 0.07], mark: [0.45, 1.20, 0.45] },
+  bossMonolith: { base: [0.20, 0.19, 0.26], deck: [0.40, 0.38, 0.54], shade: [0.06, 0.06, 0.09], mark: [0.80, 0.45, 1.35] },
+
   turret:     { base: [0.40, 0.43, 0.33], deck: [0.66, 0.70, 0.55], shade: [0.13, 0.15, 0.11], mark: [1.10, 0.50, 0.18] },
   sam:        { base: [0.39, 0.42, 0.34], deck: [0.64, 0.68, 0.54], shade: [0.12, 0.14, 0.11], mark: [1.15, 0.45, 0.18] },
   tank:       { base: [0.36, 0.41, 0.29], deck: [0.60, 0.66, 0.47], shade: [0.11, 0.13, 0.09], mark: [1.05, 0.60, 0.20] },

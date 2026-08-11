@@ -614,6 +614,40 @@ hot pink over an entire airframe leaves a single saturated block no matter what
 is baked underneath. Bodies are now tinted by `hullFor()`'s muted hull, and the
 neon palette is reserved for what it was for: lamps, exhaust and weapon fire.
 
+### Flight routes
+
+Enemies used to home: `swarm` rammed the ship, `weave` tracked `ship.x`, `dive`
+leaned toward it. Everything on screen pointed at the player, which makes the
+lane a funnel and removes any sense that these craft were going somewhere before
+you arrived.
+
+`js/game/routes.js` gives each craft a **committed path** decided at spawn —
+transit, sweep, serpent, strafe, hook or orbit — flown regardless of where the
+ship goes. Craft steer toward waypoints at their own speed rather than snapping,
+so a heavy hull arcs wide where an interceptor turns inside it. Lane comes from
+where it entered, so a group spawned together flies as a formation.
+
+About a fifth still hunt. Removing every pursuer takes the pressure out of the
+lane entirely; the point is that chasing is now the exception.
+
+Sizes and speeds were compressed at the same time — radius 7-26 (3.7x) became
+12-22 (1.8x), speed 0.34-2.1 (6.2x) became 0.80-1.55 (1.9x). The old floor had a
+Mite at 7px and a Juggernaut crawling at 0.34.
+
+### Bosses
+
+Six encounters that all used the same silhouette and the same sine-wave pace,
+differing only in what came out of them. Each now has its own **airframe** — a
+gun emplacement, a legged walker, a flight deck, a rail platform, a hive barge,
+and a prism that is not built at all — and its own **second phase** at half
+health, announced with a screen-clearing burst.
+
+The phases change the mechanic, not the rate: the Harbour Gun reverses its spin
+so every gap the player has learned inverts; the Siege Walker's wall of fire
+grows a gap that walks across the lane; the Rail Fortress starts bracketing
+where the ship *is*; the Void Monolith blinks to a new station and adds a
+counter-rotating ring whose gaps close as they expand.
+
 ### Structures
 
 
