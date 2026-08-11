@@ -33,7 +33,6 @@ layout(location=5) in vec2 a_param;
 layout(location=6) in float a_shape;
 
 uniform vec2 u_res;
-uniform vec2 u_shake;
 
 out vec2 v_local;
 out vec4 v_color;
@@ -50,7 +49,7 @@ void main() {
 
   float c = cos(a_rot), s = sin(a_rot);
   vec2 p = a_corner * a_size;
-  p = vec2(p.x * c - p.y * s, p.x * s + p.y * c) + a_pos + u_shake;
+  p = vec2(p.x * c - p.y * s, p.x * s + p.y * c) + a_pos;
 
   vec2 clip = (p / u_res) * 2.0 - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
@@ -293,7 +292,6 @@ export class Renderer {
     this.quality = 1;
     this.wideBloom = true;
 
-    this.shake = [0, 0];
     this.flash = [0, 0, 0];
     this.bloomIntensity = 0.62;
     this.bloomThreshold = 0.95;
@@ -470,7 +468,6 @@ export class Renderer {
 
       gl.useProgram(this.progQuad);
       gl.uniform2f(this.uQuad.u_res, this.cssWidth, this.cssHeight);
-      gl.uniform2f(this.uQuad.u_shake, this.shake[0], this.shake[1]);
 
       gl.bindVertexArray(this.vao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuf);

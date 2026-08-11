@@ -207,7 +207,6 @@ export class Game {
     this.layers = [];
     this.nebulae = [];
 
-    this.shakeAmount = 0;
     this.flashAmount = 0;
     this.flashColor = [0, 0, 0];
     this.timeScale = 1;
@@ -645,7 +644,7 @@ export class Game {
       e.behavior = 'dive';
     }
 
-    if (def.boss) { this.shake(14); this.flash([0.35, 0.05, 0.1], 0.5); }
+    if (def.boss) this.flash([0.35, 0.05, 0.1], 0.5);
     return e;
   }
 
@@ -1039,7 +1038,6 @@ export class Game {
         this._knocks++;
       }
     }
-    if (frac > 0.25) this.shake(2 + 6 * frac);
 
     if (showNumber && amount >= 1 && (frac > 0.06 || Math.random() < 0.06)) {
       this.addFloater(e.x, e.y - e.radius, fmtShort(amount),
@@ -1077,7 +1075,6 @@ export class Game {
         const falloff = 1 - d / (e.blast + this.ship.radius);
         this.damageShip(e.dmg * TUNING.CONTACT_SCALE * 0.9 * falloff, null);
       }
-      this.shake(7);
     }
 
     if (!silent) this.dropLoot(e);
@@ -1087,7 +1084,6 @@ export class Game {
     }
 
     if (e.boss) {
-      this.shake(26);
       this.flash([0.5, 0.15, 0.2], 0.8);
       this.emit('bossKill', { wave: run.wave });
     } else if (e.splits > 0) {
@@ -1156,7 +1152,6 @@ export class Game {
     if (dmg > cap) {
       dmg = cap;
       run.iframe = TUNING.IFRAME_SECONDS;
-      this.shake(9);
       this.addHitstop(0.07);
     }
 
@@ -1170,7 +1165,6 @@ export class Game {
     if (dmg > 0) {
       run.hull -= dmg;
       this.synth.towerHit();
-      this.shake(6 + Math.min(14, (dmg / Math.max(1, s.maxHull)) * 90));
       this.flash([0.4, 0.06, 0.1], 0.32);
     }
     if (source && s.thorns > 0) this.damageEnemy(source, source.dmg * s.thorns, false, false);
@@ -1185,7 +1179,6 @@ export class Game {
     // that dies right here keeps the Cores.
     const cores = this.state.bankRun();
     this.synth.death();
-    this.shake(34);
     this.flash([0.55, 0.1, 0.15], 1.1);
     this.spawnExplosion(this.ship.x, this.ship.y, 30, COLORS.ship, true);
     this.emit('runOver', { wave: run.wave, cores });
@@ -1212,7 +1205,6 @@ export class Game {
         this.damageEnemy(e, power, false, false);
       }
       this.spawnRing(this.ship.x, this.ship.y, Math.max(this.fieldW, this.fieldH), [0.4, 0.9, 1.6], 0.9);
-      this.shake(20);
       this.flash([0.2, 0.45, 0.6], 0.85);
     } else if (key === 'aegis') {
       this.buffs.aegis = def.dur;
@@ -1250,8 +1242,6 @@ export class Game {
     this.fxSeed = x;
     return x / 4294967296;
   }
-
-  shake(amount) { this.shakeAmount = Math.min(46, this.shakeAmount + amount); }
 
   flash(color, amount) {
     if (amount > this.flashAmount) { this.flashAmount = amount; this.flashColor = color; }
@@ -2253,7 +2243,6 @@ export class Game {
       if (hit) {
         this.addFloater(sh.x, sh.y - 8, fmtShort(sh.dmg) + ' x' + hit, COLORS.flak, 1.05);
       }
-      this.shake(3);
       this.synth.kill(false);
       this.shells.splice(i, 1);
     }
@@ -2445,8 +2434,6 @@ export class Game {
   }
 
   decayFeedback(dt) {
-    this.shakeAmount *= Math.pow(0.0016, dt);
-    if (this.shakeAmount < 0.05) this.shakeAmount = 0;
     this.flashAmount *= Math.pow(0.0009, dt);
     if (this.flashAmount < 0.002) this.flashAmount = 0;
   }
@@ -2459,9 +2446,6 @@ export class Game {
     const { run } = this.state;
     R.begin();
 
-    const sh = this.shakeAmount;
-    R.shake[0] = sh ? (Math.random() - 0.5) * sh : 0;
-    R.shake[1] = sh ? (Math.random() - 0.5) * sh : 0;
     R.flash[0] = this.flashColor[0] * this.flashAmount;
     R.flash[1] = this.flashColor[1] * this.flashAmount;
     R.flash[2] = this.flashColor[2] * this.flashAmount;
@@ -2944,9 +2928,7 @@ export class Game {
     ctx.clearRect(0, 0, this.w, this.h);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const sx = this.renderer.shake[0], sy = this.renderer.shake[1];
-
-    this.renderShipStatus(ctx, sx, sy);
+    this.renderShipStatus(ctx);
     for (const f of this.floaters) {
       const t = f.life / f.maxLife;
       const size = 13 * f.scale;
@@ -2970,7 +2952,7 @@ export class Game {
  * the ship, not the chrome. Showing damage where the damage is happening means
  * zero UI in the good case and instant legibility in the bad one.
  */
-Game.prototype.renderShipStatus = function (ctx, sx, sy) {
+Game.prototype.renderShipStatus = function (ctx) {
   const { run } = this.state;
   const s = this.stats;
   const hull = Math.max(0, Math.min(1, run.hull / s.maxHull));
@@ -2980,7 +2962,7 @@ Game.prototype.renderShipStatus = function (ctx, sx, sy) {
   // Below the ship, and on a dark plate. Above the hull it sat in the busiest
   // part of the screen — incoming fire, explosions and the enemy formation all
   // occupy that space — and thin glowing text simply disappeared into it.
-  const x = this.ship.x + sx;
+  const x = this.ship.x;
   const rows = [];
   if (hull <= 0.995) {
     rows.push({
@@ -2995,7 +2977,7 @@ Game.prototype.renderShipStatus = function (ctx, sx, sy) {
 
   const lineH = 14;
   const height = rows.length * lineH + 6;
-  let top = this.ship.y + this.ship.radius + 9 + sy;
+  let top = this.ship.y + this.ship.radius + 9;
   // Keep it inside the flight lane rather than under the ability row.
   top = Math.min(top, this.y1 - height - 4);
 

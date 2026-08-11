@@ -38,7 +38,7 @@ const silentSynth = new Proxy({}, { get: () => () => {} });
 
 // Records draw calls so we can assert the renderer is actually being fed.
 const stubRenderer = {
-  shake: [0, 0], flash: [0, 0, 0], calls: 0,
+  flash: [0, 0, 0], calls: 0,
   begin() { this.calls = 0; },
   push() { this.calls++; },
   glow() { this.calls++; }, disc() { this.calls++; }, ring() { this.calls++; },

@@ -180,7 +180,6 @@ function startNewRun(fromDeath) {
   game.singularity = null;
   game.lance = null;
   game.floaters.length = 0;
-  game.shakeAmount = 0;
   game.flashAmount = 0;
   game.paused = false;
 
