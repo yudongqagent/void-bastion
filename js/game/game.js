@@ -2633,66 +2633,43 @@ export class Game {
         }
       }
     }
+    // Exhaust only, tight and behind the nozzles. A broad glow over the hull
+    // is what made craft read as luminous blobs instead of solid objects.
     if (!e.ground) {
-      R.glow(e.x - Math.sin(f) * -s * 1.05, e.y + Math.cos(f) * -s * 1.05,
-        s * 0.8, acc[0], acc[1], acc[2], 0.28 * alpha, 1.9);
+      R.glow(e.x + Math.sin(f) * s * 1.0, e.y - Math.cos(f) * s * 1.0,
+        s * 0.42, acc[0], acc[1], acc[2], 0.30 * alpha, 2.1);
     }
   }
 
-  /** Untextured fallback: the recipe drawn primitive by primitive. */
+  /**
+   * Untextured fallback.
+   *
+   * Draws the same crude bodies the wreckage system uses, rather than a second
+   * interpretation of the recipe — one derivation, so a craft and its debris
+   * cannot disagree about what it was built from. Only runs when the baked
+   * atlas is missing or still downloading.
+   */
   renderCraftParts(e, r, g, b, alpha, wear, acc, s, f) {
     const R = this.renderer;
     const cos = Math.cos(f), sin = Math.sin(f);
-    const wx = (lx, ly) => e.x + lx * s * cos - ly * s * sin;
-    const wy = (lx, ly) => e.y + lx * s * sin + ly * s * cos;
     const hr = r * wear, hg = g * wear, hb = b * wear;
     const mm = materialFor(e.type);
     const hp = Math.max(0, Math.min(1, e.hp / (e.maxHp || 1)));
     const mat = hp < 0.34 ? MAT.WRECK : mm[0];
-    const uv = mm[1];
 
-    for (const part of craftParts(e.type)) {
-      const m = part.m;
-      switch (part.t) {
-        case 'bar':
-          R.beamLit(wx(part.a[0], part.a[1]), wy(part.a[0], part.a[1]),
-            wx(part.b[0], part.b[1]), wy(part.b[0], part.b[1]), part.w * s,
-            hr * m, hg * m, hb * m, alpha, 0.9, mat, uv);
-          break;
-        case 'gon':
-          R.polyLit(wx(part.p[0], part.p[1]), wy(part.p[0], part.p[1]),
-            part.r * s, part.sides, f + part.rot, hr * m, hg * m, hb * m, alpha, 0.9, mat, uv);
-          break;
-        case 'slab':
-          R.slabLit(wx(part.p[0], part.p[1]), wy(part.p[0], part.p[1]),
-            part.hw * s, part.hh * s, f, hr * m, hg * m, hb * m, alpha, part.shade, mat, uv);
-          break;
-        case 'dot':
-          R.disc(wx(part.p[0], part.p[1]), wy(part.p[0], part.p[1]), part.r * s,
-            acc[0] * m * 0.5, acc[1] * m * 0.5, acc[2] * m * 0.5, alpha);
-          break;
-        case 'ring': {
-          const c = part.tint === 'accent' ? acc
-            : part.tint === 'hull' ? [hr, hg, hb] : [r, g, b];
-          R.ring(e.x, e.y, part.r * s, part.w * s,
-            c[0] * m, c[1] * m, c[2] * m, alpha * part.alpha);
-          break;
-        }
-        case 'orbit':
-          for (let i = 0; i < part.n; i++) {
-            const a2 = e.t * part.speed + (i / part.n) * TAU;
-            R.disc(e.x + Math.cos(a2) * s * part.r, e.y + Math.sin(a2) * s * part.r,
-              s * part.size, acc[0], acc[1], acc[2], alpha);
-          }
-          break;
-        default:
-          break;
+    for (const bd of craftBodies(e.type)) {
+      const lx = bd.cx * s, ly = bd.cy * s;
+      const wx = e.x + lx * cos - ly * sin;
+      const wy = e.y + lx * sin + ly * cos;
+      const m = bd.m;
+      if (bd.shape === 'gon') {
+        R.polyLit(wx, wy, bd.r * s, bd.sides, f, hr * m, hg * m, hb * m, alpha, 0.9, mat, mm[1]);
+      } else {
+        R.slabLit(wx, wy, bd.hw * s, bd.hh * s, f + bd.rot,
+          hr * m, hg * m, hb * m, alpha, 0.85, mat, mm[1]);
       }
     }
-    R.glow(wx(0, 0.3), wy(0, 0.3), s * 0.5, acc[0], acc[1], acc[2], 0.34 * alpha, 1.9);
-    if (!e.ground) {
-      R.glow(wx(0, -1.05), wy(0, -1.05), s * 0.8, acc[0], acc[1], acc[2], 0.28 * alpha, 1.9);
-    }
+    this.renderCraftFX(e, s, f, acc, alpha, e.t || 0);
   }
 
   /** Atlas layer for a craft type, or -1 when the bake has no such class. */
@@ -2973,27 +2950,41 @@ export class Game {
       R.glow(x, y, 44, COLORS.shield[0], COLORS.shield[1], COLORS.shield[2], shieldFrac * 0.18, 2.4);
     }
 
-    // Engine plume, brighter under thrust.
+    // Engine plume, tight and at the nozzle rather than a halo around the hull.
     const plume = ship.thrust;
-    R.glow(x - bank * 6, y + 20, 20 * plume, c[0], c[1], c[2], 0.55, 1.6);
-    R.spark(x - bank * 6, y + 24, 5, 16 * plume, Math.PI / 2, c[0], c[1], c[2], 0.75);
+    R.glow(x - bank * 5, y + 19, 11 * plume, c[0], c[1], c[2], 0.5, 1.7);
+    R.spark(x - bank * 5, y + 24, 5, 15 * plume, Math.PI / 2, c[0], c[1], c[2], 0.7);
 
-    // Wings, swept back and rolling with the bank.
-    R.beam(x - 20, y + 8, x - 4, y - 6, 4.2, c[0], c[1], c[2], 0.95, 0.55);
-    R.beam(x + 20, y + 8, x + 4, y - 6, 4.2, c[0], c[1], c[2], 0.95, 0.55);
-
-    // Hull. Brightness tracks integrity so a hurt ship visibly dims.
     const lit = 0.45 + hullFrac * 0.55;
-    R.glow(x, y, 40, c[0], c[1], c[2], 0.4 * lit, 1.7);
-    R.poly(x, y, 15, 3, -Math.PI / 2 + bank * 0.28, c[0] * lit, c[1] * lit, c[2] * lit, 1);
-    R.disc(x, y + 2, 5.5, 1.7, 1.9, 2.0, 1);
+    const layer = this.craftLayer('ship');
+    if (R.craftReady && layer >= 0) {
+      // Baked like every other airframe. The nose points up the screen, so the
+      // sprite is turned 180 degrees from the enemy convention; bank rolls it.
+      const rad = 17;
+      const rot = Math.PI + bank * 0.30;
+      R.craftShadow(x + rad * 0.34, y + rad * 0.26, rad * 1.35, rot, layer, 0.32);
+      R.craft(x, y, rad * 1.35, rot, layer, c[0] * lit, c[1] * lit, c[2] * lit, 1,
+        [c[0] * 1.25, c[1] * 1.25, c[2] * 1.3]);
+    } else {
+      R.glow(x, y, 34, c[0], c[1], c[2], 0.30 * lit, 1.7);
+      R.poly(x, y, 15, 3, -Math.PI / 2 + bank * 0.28, c[0] * lit, c[1] * lit, c[2] * lit, 1);
+      R.disc(x, y + 2, 5.5, 1.7, 1.9, 2.0, 1);
+    }
 
+    // Escorts are real craft too, not glowing pips.
     const wc = COLORS.wing;
+    const wl = this.craftLayer('darter');
     for (let i = 0; i < s.drones; i++) {
-      const [wx, wy] = this.wingmanPos(i, s.drones);
-      R.glow(wx, wy, 14, wc[0], wc[1], wc[2], 0.4, 1.8);
-      R.poly(wx, wy, 6.5, 3, -Math.PI / 2 + bank * 0.25, wc[0] * 0.75, wc[1] * 0.75, wc[2] * 0.75, 1);
-      R.glow(wx, wy + 7, 5, wc[0], wc[1], wc[2], 0.5, 1.6);
+      const [dx, dy] = this.wingmanPos(i, s.drones);
+      if (R.craftReady && wl >= 0) {
+        R.craftShadow(dx + 2.6, dy + 2.0, 8 * 1.35, Math.PI + bank * 0.25, wl, 0.28);
+        R.craft(dx, dy, 8 * 1.35, Math.PI + bank * 0.25, wl, wc[0], wc[1], wc[2], 1,
+          [wc[0] * 1.3, wc[1] * 1.3, wc[2] * 1.3]);
+      } else {
+        R.poly(dx, dy, 6.5, 3, -Math.PI / 2 + bank * 0.25,
+          wc[0] * 0.75, wc[1] * 0.75, wc[2] * 0.75, 1);
+      }
+      R.glow(dx, dy + 7, 4.5, wc[0], wc[1], wc[2], 0.45, 1.6);
     }
   }
 

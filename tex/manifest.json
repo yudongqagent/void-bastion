@@ -1,10 +1,11 @@
 {
   "material": "material.58987dd2.png",
   "surface": "surface.73c1a18a.png",
-  "craft_albedo": "craft_albedo.17f97928.png",
-  "craft_surface": "craft_surface.8a79339f.png",
+  "craft_albedo": "craft_albedo.868c1c37.png",
+  "craft_surface": "craft_surface.fac5c0c6.png",
   "craftGrid": 5,
   "craftOrder": [
+    "ship",
     "drone",
     "darter",
     "brute",

@@ -539,6 +539,40 @@ own strong colour would fight that. And enabling materials must not dim the
 game: measured mean luminance is 0.96x untextured, which is what `MATERIAL_GAIN`
 in the shader is calibrated against.
 
+### Airframes
+
+The recipes describe aircraft anatomy, not shapes. `js/game/airframe.js` defines
+the vocabulary — `loft` (tapered fuselage from a spine of stations), `wing`
+(root chord, tip chord, span, sweep, with an airfoil section), `nacelle` (tube
+with a recessed intake and a lit nozzle), `canopy`, `fin`, `pylon`, `store`,
+`plate`, `dome`, `barrel` — and every one carries a height profile, so the baker
+gets volume rather than an extruded outline.
+
+`mirror: true` emits a part's x-mirrored twin, which is what makes 25-part craft
+affordable to write and to read.
+
+This replaced the previous recipes, which averaged **six parts** and were mostly
+capsules. A drone was three bars and a light. Three passes of shading work —
+materials, then baked depth — were all polish applied to a stick figure; the
+silhouette was carrying no information and no amount of surface detail fixes
+that. The airframes now average **15 parts** and every class has a nose, a
+canopy, wings with distinct leading and trailing edges, and nozzles that break
+the outline.
+
+`loft` earns its keep more than the rest combined: a tapered fuselage with an
+elliptical cross-section is most of what separates an aircraft from a sausage.
+
+Craft also carry a **livery** baked in — a darker dorsal spine, lighter outboard
+panels, nose and tail bands, and a squadron roundel on each wing. It multiplies
+the material, so plating still shows through, and the archetype hull tint still
+applies on top.
+
+Two things learned authoring these. Detail has to live in the **silhouette**,
+because a craft is 16-34px on screen and fine surface features dissolve into
+grey — a notch in a wing survives, a panel line does not. And mirroring a wing
+reverses its polygon winding, which a fixed-sign inside test silently rejects;
+that shipped one bake with a full wing on the left and nothing on the right.
+
 ### Baked craft, and why texture alone was not enough
 
 Materials gave surfaces grain and a real tangent normal, and craft still read as

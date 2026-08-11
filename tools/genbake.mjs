@@ -22,15 +22,16 @@ import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { encodePNG, decodePNG } from './png.mjs';
 import { MATERIALS, clamp01 } from './materials.mjs';
-import { CRAFT, CRAFT_MATERIAL } from '../js/game/craft.js';
+import { CRAFT_MATERIAL } from '../js/game/craft.js';
+import { AIRFRAME_PARTS } from '../js/game/airframes.js';
 
 const TILE = 256;
-const SS = 2;                    // supersample factor
+const SS = 3;                    // supersample factor
 const HI = TILE * SS;
 const EXTENT = 1.35;             // local units mapped to the tile half-width
 const NOMINAL_RADIUS = 38;       // px a craft typically occupies on screen
 
-const TYPES = Object.keys(CRAFT);
+const TYPES = Object.keys(AIRFRAME_PARTS);
 const GRID = Math.ceil(Math.sqrt(TYPES.length));
 const SIZE = TILE * GRID;
 
@@ -39,23 +40,20 @@ const LIGHT = [-0.42, -0.91];
 const LIGHT_ELEV = 0.62;
 
 // --- geometry ------------------------------------------------------------------
+//
+// Every primitive answers the same question: for a point in the craft's local
+// frame, how far outside am I (negative inside), and how high is the surface
+// here? The height profile is what gives the bake real volume — an extruded
+// outline reads flat no matter how good the shading on top of it is.
 
-/** Signed distance to a capsule from a to b with radius r. Negative inside. */
-function sdCapsule(px, py, ax, ay, bx, by, r) {
+const CANOPY_LAYER = 8;     // canopy glass, in MATERIALS order
+const SCORCH_LAYER = 14;    // scorched metal, used around nozzles
+
+function sdSeg(px, py, ax, ay, bx, by) {
   const vx = bx - ax, vy = by - ay;
   const wx = px - ax, wy = py - ay;
   const t = clamp01((wx * vx + wy * vy) / (vx * vx + vy * vy + 1e-9));
-  return Math.hypot(wx - vx * t, wy - vy * t) - r;
-}
-
-/** Regular n-gon, circumradius r. Mirrors the renderer's sdPoly exactly. */
-function sdPoly(px, py, r, n, rot) {
-  const c = Math.cos(-rot), s = Math.sin(-rot);
-  const x = px * c - py * s, y = px * s + py * c;
-  const an = Math.PI / n;
-  const a = Math.atan2(y, x);
-  const k = ((a + an) % (2 * an) + 2 * an) % (2 * an) - an;
-  return Math.hypot(x, y) * Math.cos(k) - r * Math.cos(an);
+  return { d: Math.hypot(wx - vx * t, wy - vy * t), t };
 }
 
 function sdBox(px, py, hw, hh) {
@@ -64,53 +62,208 @@ function sdBox(px, py, hw, hh) {
 }
 
 /**
- * How high a part sits, and how much its cross-section bulges.
+ * Signed distance to a convex polygon. Negative inside.
  *
- * Derived from what the part IS rather than hand-authored per part: centreline
- * pieces are spine and fuselage and sit high, outboard pieces are wings and
- * sponsons and sit low. That keeps all 21 recipes working untouched and leaves
- * one function to tune instead of 150 numbers to maintain.
+ * Winding-agnostic on purpose: mirroring a wing reverses its winding, and a
+ * fixed-sign inside test then rejects every point on the mirrored side. That
+ * produced craft with a full wing on the left and nothing on the right.
  */
-function profileFor(part) {
-  // Rings and orbit nodes are effects, not structure — they stay dynamic and
-  // have no centre to read.
-  if (part.t !== 'bar' && part.t !== 'gon' && part.t !== 'slab') return null;
-  const cx = part.t === 'bar'
-    ? Math.abs((part.a[0] + part.b[0]) / 2)
-    : Math.abs(part.p[0]);
-  const central = 1 - Math.min(1, cx / 0.75);
+function sdConvex(px, py, pts) {
+  let area = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    area += a[0] * b[1] - b[0] * a[1];
+  }
+  const sign = area >= 0 ? 1 : -1;
+  let inside = true, best = 1e9;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    const ex = b[0] - a[0], ey = b[1] - a[1];
+    if (((px - a[0]) * ey - (py - a[1]) * ex) * sign > 0) inside = false;
+    best = Math.min(best, sdSeg(px, py, a[0], a[1], b[0], b[1]).d);
+  }
+  return inside ? -best : best;
+}
+
+/** The four corners of a wing, in the order the planform describes them. */
+function wingPts(w) {
+  const xr = w.x0, xt = w.x0 + w.span;
+  return [
+    [xr, w.y + w.root / 2],
+    [xt, w.y + w.tip / 2 - w.sweep],
+    [xt, w.y - w.tip / 2 - w.sweep],
+    [xr, w.y - w.root / 2],
+  ];
+}
+
+/**
+ * Evaluate one part.
+ *
+ * @returns {?{d:number, h:number, mat:number, em:number}} d is signed distance,
+ *   h the surface height, mat an optional material override, em emissive.
+ */
+function evalPart(part, x, y) {
   switch (part.t) {
-    case 'bar': {
-      const w = part.w;
-      // A bar becomes a tube: the rise is proportional to its own thickness.
-      return { base: 0.26 + 0.30 * central, rise: Math.min(0.34, w * 1.5) };
+    case 'loft': {
+      const st = part.st;
+      const yHi = st[0][0], yLo = st[st.length - 1][0];
+      if (y > yHi || y < yLo) {
+        // Cap the ends so the nose and tail close rather than shearing off.
+        const yc = y > yHi ? yHi : yLo;
+        const s = y > yHi ? st[0] : st[st.length - 1];
+        const d = Math.hypot(x, y - yc) - s[1] * 0.6;
+        if (d > 0) return null;
+        return { d, h: s[2] * 0.5 * Math.sqrt(Math.max(0, 1 - (d / (s[1] + 1e-6)) ** 2)) };
+      }
+      let i = 0;
+      while (i < st.length - 2 && y < st[i + 1][0]) i++;
+      const a = st[i], b = st[i + 1];
+      const t = (a[0] - y) / (a[0] - b[0] + 1e-9);
+      const w = a[1] + (b[1] - a[1]) * t;
+      const hh = a[2] + (b[2] - a[2]) * t;
+      const d = Math.abs(x) - w;
+      if (d > 0) return null;
+      const u = clamp01(Math.abs(x) / (w + 1e-6));
+      return { d, h: hh * Math.sqrt(Math.max(0, 1 - u * u)) };
     }
-    case 'gon':
-      // A polygon becomes a blister/dome.
-      return { base: 0.28 + 0.26 * central, rise: Math.min(0.40, part.r * 0.85) };
-    case 'slab':
-      return { base: 0.24 + 0.22 * central, rise: 0.07 };
+    case 'wing': {
+      const pts = wingPts(part);
+      const d = sdConvex(x, y, pts);
+      if (d > 0) return null;
+      // Airfoil: thick at the root and just aft of the leading edge, thin at
+      // the tip and along the trailing edge.
+      const spanT = clamp01(Math.abs(x - part.x0) / (Math.abs(part.span) + 1e-6));
+      const chord = part.root + (part.tip - part.root) * spanT;
+      const yMid = part.y - part.sweep * spanT;
+      const chordT = clamp01((yMid + chord / 2 - y) / (chord + 1e-6));
+      const thick = Math.sin(Math.PI * Math.min(1, chordT * 1.7)) * (1 - spanT * 0.65);
+      return { d, h: part.h * Math.max(0.18, thick) };
+    }
+    case 'nacelle': {
+      const [cx, cy] = part.p;
+      const { d: dd, t } = sdSeg(x, y, cx, cy + part.len / 2, cx, cy - part.len / 2);
+      const d = dd - part.r;
+      if (d > 0) return null;
+      const u = clamp01(dd / part.r);
+      let h = part.h * Math.sqrt(Math.max(0, 1 - u * u));
+      let em = 0, mat = -1;
+      // t runs 0 at the intake to 1 at the nozzle.
+      if (part.intake && t < 0.12) h *= 0.45 + t / 0.12 * 0.55;         // recessed lip
+      if (part.nozzle && t > 0.86) {
+        h *= 0.5 + (1 - t) / 0.14 * 0.5;
+        em = clamp01((t - 0.86) / 0.14) * (1 - u * 0.6);
+        mat = SCORCH_LAYER;
+      }
+      return { d, h, em, mat };
+    }
+    case 'canopy': {
+      const [cx, cy] = part.p;
+      const u = Math.hypot((x - cx) / part.rx, (y - cy) / part.ry);
+      if (u > 1) return null;
+      return { d: (u - 1) * part.rx, h: part.h * Math.sqrt(Math.max(0, 1 - u * u)),
+        mat: CANOPY_LAYER };
+    }
+    case 'fin': {
+      const [cx, cy] = part.p;
+      const pts = [
+        [cx - part.hw, cy], [cx + part.hw, cy],
+        [cx + part.hw * 0.4 - part.sweep, cy - part.len],
+        [cx - part.hw * 0.4 - part.sweep, cy - part.len],
+      ];
+      const d = sdConvex(x, y, pts);
+      if (d > 0) return null;
+      const t = clamp01((cy - y) / (part.len + 1e-6));
+      return { d, h: part.h * (1 - t * 0.45) };
+    }
+    case 'pylon': case 'plate': {
+      const [cx, cy] = part.p;
+      const rot = part.rot || 0;
+      const c = Math.cos(-rot), s = Math.sin(-rot);
+      const lx = (x - cx) * c - (y - cy) * s, ly = (x - cx) * s + (y - cy) * c;
+      const d = sdBox(lx, ly, part.hw, part.hh);
+      if (d > 0) return null;
+      // Chamfered edge so plates read as slabs with thickness, not as decals.
+      return { d, h: part.h * Math.min(1, -d / 0.05 + 0.35) };
+    }
+    case 'store': {
+      const [cx, cy] = part.p;
+      const { d: dd, t } = sdSeg(x, y, cx, cy + part.len / 2, cx, cy - part.len / 2);
+      // Pointed nose on the ordnance.
+      const r = part.r * (t < 0.22 ? 0.35 + (t / 0.22) * 0.65 : 1);
+      const d = dd - r;
+      if (d > 0) return null;
+      const u = clamp01(dd / (r + 1e-6));
+      return { d, h: part.h * Math.sqrt(Math.max(0, 1 - u * u)) };
+    }
+    case 'dome': {
+      const [cx, cy] = part.p;
+      const u = Math.hypot(x - cx, y - cy) / part.r;
+      if (u > 1) return null;
+      return { d: (u - 1) * part.r, h: part.h * Math.sqrt(Math.max(0, 1 - u * u)) };
+    }
+    case 'barrel': {
+      const [cx, cy] = part.p;
+      const a = (part.ang || 0);
+      const dx = -Math.sin(a), dy = Math.cos(a);
+      const { d: dd } = sdSeg(x, y, cx, cy, cx + dx * part.len, cy + dy * part.len);
+      const d = dd - part.r;
+      if (d > 0) return null;
+      const u = clamp01(dd / part.r);
+      return { d, h: part.h * Math.sqrt(Math.max(0, 1 - u * u)) };
+    }
     default:
       return null;
   }
 }
 
+/**
+ * Paint, as distinct from material.
+ *
+ * A single hull tint over the whole craft is why they read as coloured blocks.
+ * Real aircraft carry a scheme: a darker dorsal spine, lighter outboard panels,
+ * a contrasting nose and tail band, an insignia. This multiplies the material,
+ * so plating and panel lines still show through, and the archetype hull tint
+ * still applies on top of the result.
+ */
+function livery(x, y, type) {
+  let k = 1;
+  // Dorsal shadow line down the spine, and lighter outboard skin.
+  const ax = Math.abs(x);
+  k *= 0.88 + 0.26 * clamp01(ax / 0.55);
+  // Nose and tail bands.
+  if (y > 0.62) k *= 1.16;
+  if (y < -0.62) k *= 0.84;
+  // Wing walkway: a darker strip just outboard of the root.
+  if (ax > 0.24 && ax < 0.34) k *= 0.90;
+
+  // Squadron insignia — a roundel on each wing. Small, high contrast, and the
+  // single most "built by someone" detail on the airframe.
+  const rx = ax - 0.52, ry = y - 0.02;
+  const rr = Math.hypot(rx, ry);
+  let tint = [k, k, k];
+  if (rr < 0.10) {
+    const ring = rr > 0.062 && rr < 0.092;
+    const core = rr < 0.042;
+    if (ring || core) tint = [k * 1.35, k * 0.72, k * 0.55];
+    else tint = [k * 1.12, k * 1.10, k * 1.06];
+  }
+  return tint;
+}
+
 // --- bake one craft ------------------------------------------------------------
 
 function bakeCraft(type) {
-  const parts = CRAFT[type];
+  const parts = AIRFRAME_PARTS[type];
   const [matLayer, repeatPx] = CRAFT_MATERIAL[type] || [0, 24];
-  const material = MATERIALS[matLayer].fn;
   const matSeed = 1000 + matLayer * 137;
-  // Plating density that matches how the craft actually appears on screen.
   const matRepeats = (2 * NOMINAL_RADIUS) / repeatPx;
 
   const N = HI * HI;
-  const H = new Float32Array(N);        // height, 0 where uncovered
-  const A = new Float32Array(N);        // coverage
+  const H = new Float32Array(N);
+  const A = new Float32Array(N);
   const Cr = new Float32Array(N), Cg = new Float32Array(N), Cb = new Float32Array(N);
-  const Ro = new Float32Array(N);       // roughness
-  const Em = new Float32Array(N);       // emissive (running lights)
+  const Ro = new Float32Array(N);
+  const Em = new Float32Array(N);
 
   const toLocal = (i) => (i / HI) * 2 * EXTENT - EXTENT;
   const px2local = (2 * EXTENT) / HI;
@@ -121,42 +274,29 @@ function bakeCraft(type) {
       const lx = toLocal(px + 0.5);
       const i = py * HI + px;
 
-      let bestH = -1, bestPart = null, bestCov = 0;
+      // The topmost part at this point wins the surface; coverage is the union.
+      let bestH = -1, best = null, bestPart = null, cover = 0;
       for (const part of parts) {
-        const prof = profileFor(part);
-        if (!prof) continue;
-        let d, u;
-        if (part.t === 'bar') {
-          d = sdCapsule(lx, ly, part.a[0], part.a[1], part.b[0], part.b[1], part.w);
-          u = clamp01((d + part.w) / part.w);          // 0 at axis, 1 at rim
-        } else if (part.t === 'gon') {
-          d = sdPoly(lx - part.p[0], ly - part.p[1], part.r, part.sides, part.rot || 0);
-          u = clamp01(Math.hypot(lx - part.p[0], ly - part.p[1]) / part.r);
-        } else {
-          d = sdBox(lx - part.p[0], ly - part.p[1], part.hw, part.hh);
-          u = clamp01(-d / 0.06);                      // chamfered edge
-          u = 1 - u;
-        }
-        if (d > px2local) continue;
-        // Antialiased coverage from the distance field.
-        const cov = clamp01(0.5 - d / px2local);
+        const r = evalPart(part, lx, ly);
+        if (!r) continue;
+        const cov = clamp01(0.5 - r.d / px2local);
         if (cov <= 0) continue;
-        const bulge = Math.sqrt(Math.max(0, 1 - u * u));
-        const h = prof.base + prof.rise * bulge;
-        if (h > bestH) { bestH = h; bestPart = part; bestCov = cov; }
-        if (cov > A[i]) A[i] = cov;
+        if (cov > cover) cover = cov;
+        if (r.h > bestH) { bestH = r.h; best = r; bestPart = part; }
       }
-
       if (!bestPart) continue;
+      A[i] = cover;
       H[i] = bestH;
+      if (best.em) Em[i] = best.em;
 
-      // Material sampled in the craft's own frame, so plating and panel lines
-      // belong to this hull rather than floating over it.
+      const layer = best.mat >= 0 ? best.mat : matLayer;
+      const seed = best.mat >= 0 ? 1000 + best.mat * 137 : matSeed;
       const mu = ((lx / (2 * EXTENT)) + 0.5) * matRepeats;
       const mv = ((ly / (2 * EXTENT)) + 0.5) * matRepeats;
-      const m = material(mu - Math.floor(mu), mv - Math.floor(mv), matSeed);
+      const m = MATERIALS[layer].fn(mu - Math.floor(mu), mv - Math.floor(mv), seed);
       const k = bestPart.m || 1;
-      Cr[i] = m.r * k; Cg[i] = m.g * k; Cb[i] = m.b * k;
+      const liv = livery(lx, ly, type);
+      Cr[i] = m.r * k * liv[0]; Cg[i] = m.g * k * liv[1]; Cb[i] = m.b * k * liv[2];
       Ro[i] = m.rough;
     }
   }
@@ -166,8 +306,7 @@ function bakeCraft(type) {
     if (part.t !== 'dot') continue;
     const cx = (part.p[0] / (2 * EXTENT) + 0.5) * HI;
     const cy = (part.p[1] / (2 * EXTENT) + 0.5) * HI;
-    // Lights read as lamps set into the hull, not as glowing discs bolted on.
-    const r = (part.r * 0.62 / (2 * EXTENT)) * HI;
+    const r = (part.r * 0.9 / (2 * EXTENT)) * HI;
     const r2 = Math.ceil(r) + 2;
     for (let y = Math.max(0, cy - r2 | 0); y < Math.min(HI, cy + r2); y++) {
       for (let x = Math.max(0, cx - r2 | 0); x < Math.min(HI, cx + r2); x++) {
@@ -176,8 +315,8 @@ function bakeCraft(type) {
         if (cov <= 0) continue;
         const i = y * HI + x;
         Em[i] = Math.max(Em[i], cov * Math.min(1, (part.m || 1) / 2.6));
-        if (cov > A[i]) { A[i] = cov; }
-        H[i] = Math.max(H[i], 0.62);
+        if (cov > A[i]) A[i] = cov;
+        H[i] = Math.max(H[i], 0.5);
       }
     }
   }
