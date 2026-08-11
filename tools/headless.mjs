@@ -51,6 +51,29 @@ const stubRenderer = {
 // --- run ---------------------------------------------------------------------
 
 const state = new GameState();
+const overlayErrors = [];
+// A strict 2D-context stub. A real canvas silently ignores undefined/NaN
+// coordinates, which is exactly how a dangling variable in renderOverlay
+// reached production and froze the game on the first damage number.
+const ctx2d = new Proxy({}, {
+  get(_t, k) {
+    if (k === 'canvas') return { width: 420, height: 780 };
+    // Query methods have to hand back something usable or the overlay cannot run.
+    if (k === 'measureText') return (t) => ({ width: String(t).length * 7 });
+    if (k === 'createLinearGradient' || k === 'createRadialGradient') {
+      return () => ({ addColorStop() {} });
+    }
+    return (...args) => {
+      for (const [i, a] of args.entries()) {
+        if (a === undefined || (typeof a === 'number' && !Number.isFinite(a))) {
+          overlayErrors.push(`ctx.${String(k)}() arg ${i} is ${a}`);
+        }
+      }
+    };
+  },
+  set() { return true; },
+});
+
 const game = new Game(state, silentSynth, stubRenderer);
 game.resize(420, 780);   // phone-ish portrait, the primary target
 
@@ -119,9 +142,17 @@ console.log('\n  VOID BASTION — headless loop test');
 console.log(`  driving the real Game.update() at ${Math.round(1 / DT)}Hz\n`);
 if (VERBOSE) console.log('  wave   dur    kills    coins       hull      alive');
 
+let renderFrames = 0;
 while (state.run.wave < TARGET_WAVES && simTime < MAX_SIM_SECONDS && !state.run.over) {
   game.update(DT);
   simTime += DT;
+
+  // Every 7th frame: often enough that a 0.9s floater, a falling wreck and a
+  // hitstop hold are all on screen at some point, cheap enough not to dominate.
+  if (renderFrames++ % 7 === 0) {
+    game.render(simTime);
+    game.renderOverlay(ctx2d, 1);
+  }
 
   if (state.run.coins > lastCoins) collected += state.run.coins - lastCoins;
   lastCoins = state.run.coins;
@@ -162,8 +193,11 @@ while (state.run.wave < TARGET_WAVES && simTime < MAX_SIM_SECONDS && !state.run.
 
 // --- render pass ---------------------------------------------------------------
 
+stubRenderer.calls = 0;
 game.render(simTime);
+game.renderOverlay(ctx2d, 1);
 const drawCalls = stubRenderer.calls;
+const renderedFrames = Math.floor(renderFrames / 7);
 
 // --- assertions ----------------------------------------------------------------
 
@@ -182,6 +216,9 @@ check(wreckPoolGrowth === 0,
 check(peakPickups > 0, 'kills never dropped any loot');
 check(collected > 0, 'the ship never collected a single pickup');
 check(drawCalls > 50, `render() only issued ${drawCalls} draw calls`);
+check(overlayErrors.length === 0,
+  `overlay drew with bad arguments: ${[...new Set(overlayErrors)].slice(0, 4).join('; ')}`);
+check(renderedFrames > 100, `only ${renderedFrames} frames were ever rendered`);
 for (const [k, v] of Object.entries(s)) {
   check(Number.isFinite(v), `stat "${k}" is not finite (${v})`);
 }
@@ -210,6 +247,8 @@ console.log(`
   revives (deaths) ..... ${revives}${NATURAL ? '  (natural mode: died for real)' : ''}
   pool sizes ........... enemies ${game.enemies.items.length}, bullets ${game.bullets.items.length}, particles ${game.particles.items.length}
   draw calls / frame ... ${drawCalls}
+  frames rendered ...... ${renderedFrames}
+  overlay arg errors ... ${overlayErrors.length}
 `);
 
 if (failures.length) {

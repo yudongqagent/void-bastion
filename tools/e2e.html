@@ -1,0 +1,181 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>void bastion — e2e</title>
+<!--
+  End-to-end harness.
+
+  It boots the REAL game — real ES modules, real WebGL2 shader compilation, real
+  canvas-2D overlay, real DOM and UI — and then drives its REAL frame loop. The
+  only two things it fakes are the reasons the game cannot otherwise run in an
+  automated browser pane:
+
+    * requestAnimationFrame, which never fires in a headless/offscreen pane, is
+      replaced with a setTimeout pump.
+    * window.innerWidth/Height, which report 0 there, are pinned to a phone-sized
+      viewport so resize() will accept them.
+
+  Everything else is production code. This exists because the Node harness stubs
+  the renderer, so it cannot catch a shader that fails to compile or an overlay
+  that throws — and an overlay that throws freezes the game, because the loop
+  reschedules itself at the end of the frame.
+
+  Load it and read window.E2E for results.
+-->
+<style>
+  html, body { margin: 0; background: #05070d; }
+</style>
+<script>
+  // --- fake the two things a headless pane cannot provide ---------------------
+  const VIEW_W = 420, VIEW_H = 780;
+  Object.defineProperty(window, 'innerWidth', { get: () => VIEW_W, configurable: true });
+  Object.defineProperty(window, 'innerHeight', { get: () => VIEW_H, configurable: true });
+  Object.defineProperty(window, 'devicePixelRatio', { get: () => 1, configurable: true });
+
+  // A pump the test can step deterministically. `pending` holds the game's own
+  // rescheduled callback, so calling E2E.step() advances the real loop by one
+  // real frame — including main.js's try/catch and its reschedule.
+  let pending = null;
+  let clock = 0;
+  window.requestAnimationFrame = (cb) => { pending = cb; return 1; };
+  window.cancelAnimationFrame = () => { pending = null; };
+
+  // ?fresh=1 tests the new-player path. This has to happen here, before the
+  // module imports: clearing from the console does not work, because the page
+  // being navigated away from re-saves its state on the way out.
+  if (new URLSearchParams(location.search).has('fresh')) {
+    localStorage.clear();
+  }
+
+  // --- capture every way the page can fail ------------------------------------
+  const errors = [];
+  window.addEventListener('error', (e) => errors.push(String(e.message || e.error)));
+  window.addEventListener('unhandledrejection', (e) => errors.push('unhandled: ' + e.reason));
+  const realErr = console.error.bind(console);
+  console.error = (...a) => { errors.push(a.map(String).join(' ')); realErr(...a); };
+
+  window.E2E = {
+    errors,
+    get alive() { return pending !== null; },
+    /** Advance the real loop by n frames of dtMs each. */
+    step(n = 1, dtMs = 16.7) {
+      let ran = 0;
+      for (let i = 0; i < n; i++) {
+        const cb = pending;
+        if (!cb) break;              // loop is dead — the failure we hunt for
+        pending = null;
+        clock += dtMs;
+        cb(clock);
+        ran++;
+      }
+      return ran;
+    },
+
+    /**
+     * The suite. Starts a run through the real UI, drives real frames, and
+     * checks the things only a real browser can check.
+     */
+    run(frames = 2500) {
+      const out = { checks: [], stats: {} };
+      const ok = (name, cond, detail) =>
+        out.checks.push({ name, pass: !!cond, detail: detail === undefined ? '' : String(detail) });
+
+      const { game: g, state: st, renderer: R } = window.VB;
+      const gl = R.gl;
+
+      // 1. Every shader actually compiled and linked in a real GL context.
+      for (const k of ['progQuad', 'progBright', 'progBlur', 'progComposite']) {
+        if (!R[k]) continue;
+        ok('shader ' + k + ' links', gl.getProgramParameter(R[k], gl.LINK_STATUS),
+          (gl.getProgramInfoLog(R[k]) || '').trim());
+      }
+      ok('no GL error after boot', gl.getError() === 0);
+
+      // 2. Start a run the way a player does — real clicks, not internal calls.
+      const diff = document.querySelector('#diffList .diff');
+      if (diff) diff.click();
+      const launch = [...document.querySelectorAll('#home button')]
+        .find((b) => /launch/i.test(b.textContent || ''));
+      ok('LAUNCH button exists', !!launch);
+      if (launch) launch.click();
+      ok('home screen closed', document.getElementById('home').hidden);
+      ok('game unpaused', !g.paused);
+
+      // 3. Drive the real loop.
+      const k0 = st.run.kills;
+      let frozen = 0, stall = 0, longestStall = 0, maxFreeze = 0;
+      let peakWrecks = 0, peakFloaters = 0, died = -1;
+      for (let i = 0; i < frames; i++) {
+        if (this.step(1) === 0) { died = i; break; }
+        if (g.freeze > 0) { frozen++; stall++; longestStall = Math.max(longestStall, stall); }
+        else stall = 0;
+        maxFreeze = Math.max(maxFreeze, g.freeze || 0);
+        peakWrecks = Math.max(peakWrecks, g.wrecks.items.filter((w) => w.active).length);
+        peakFloaters = Math.max(peakFloaters, g.floaters.length);
+      }
+
+      const kills = st.run.kills - k0;
+      // The headline check: an exception anywhere in the frame body used to
+      // kill the loop permanently, which is what "the screen is stuck" means.
+      ok('loop survived ' + frames + ' frames', died === -1, died === -1 ? '' : 'died at frame ' + died);
+      ok('no errors thrown', errors.length === 0, errors.slice(0, 2).join(' | '));
+      ok('enemies were killed', kills > 0, kills + ' kills');
+      ok('wreckage spawned', peakWrecks > 0, 'peak ' + peakWrecks);
+      ok('damage numbers drew', peakFloaters > 0, 'peak ' + peakFloaters);
+      // Hitstop must stay punctuation. Above ~8% it reads as a stutter.
+      ok('hitstop under 8% of frames', frozen / frames < 0.08,
+        (100 * frozen / frames).toFixed(1) + '%');
+      ok('no stall longer than 6 frames', longestStall <= 6, longestStall + ' frames');
+
+      out.stats = {
+        kills, wave: st.run.wave,
+        framesFrozenPct: +(100 * frozen / frames).toFixed(1),
+        longestStallFrames: longestStall,
+        maxFreezeSec: +maxFreeze.toFixed(3),
+        peakWrecks, peakFloaters,
+      };
+      out.pass = out.checks.every((c) => c.pass);
+      this.result = out;
+      return out;
+    },
+  };
+</script>
+<script type="module">
+  // Pull the real markup from index.html rather than duplicating it — a stale
+  // copy here would silently test a DOM the game no longer ships with.
+  const html = await (await fetch('../index.html')).text();
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  for (const link of doc.querySelectorAll('link[rel="stylesheet"]')) {
+    const el = document.createElement('link');
+    el.rel = 'stylesheet';
+    el.href = '../' + link.getAttribute('href');
+    document.head.appendChild(el);
+  }
+  // Everything except index.html's own module script, which we import ourselves
+  // once the DOM it needs is in place.
+  for (const node of [...doc.body.childNodes]) {
+    if (node.nodeName === 'SCRIPT') continue;
+    document.body.appendChild(document.importNode(node, true));
+  }
+
+  try {
+    await import('../js/main.js');
+    window.E2E.booted = true;
+  } catch (err) {
+    window.E2E.errors.push('boot failed: ' + (err && err.stack || err));
+    window.E2E.booted = false;
+  }
+  window.E2E.ready = true;
+
+  // Auto-run and print a readable report, so the page is useful on its own.
+  const r = window.E2E.run();
+  const rows = r.checks.map((c) =>
+    `<tr><td>${c.pass ? '&#10003;' : '&#10007;'}</td><td>${c.name}</td><td>${c.detail}</td></tr>`).join('');
+  const stats = Object.entries(r.stats)
+    .map(([k, v]) => `<tr><td></td><td>${k}</td><td>${v}</td></tr>`).join('');
+  document.body.innerHTML =
+    `<pre style="color:${r.pass ? '#7bf0ab' : '#ff5a6e'};font:600 15px ui-monospace,monospace;padding:16px">`
+    + (r.pass ? 'E2E PASS' : 'E2E FAIL') + '</pre>'
+    + `<table style="color:#cfe3ff;font:13px ui-monospace,monospace;border-spacing:10px 3px">`
+    + rows + '<tr><td colspan="3">&nbsp;</td></tr>' + stats + '</table>';
+</script>

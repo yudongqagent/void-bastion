@@ -453,6 +453,7 @@ js/ui/hud.js          DOM layer
 js/audio/synth.js     procedural WebAudio
 tools/simulate.mjs    balance harness  — is the progression curve any good?
 tools/headless.mjs    loop smoke test  — does the real game actually run?
+tools/e2e.html        browser test     — does it run in a REAL browser?
 tools/devserver.py    no-cache static server for local development
 ```
 
@@ -490,6 +491,37 @@ It exits non-zero on failure. To measure how deep an unaided run actually gets
 ```bash
 node tools/headless.mjs --waves 400 --natural
 ```
+
+### The browser test, and why it has to exist
+
+`headless.mjs` stubs the renderer, so there is an entire class of failure it
+structurally cannot see: a shader that does not compile, or an overlay that
+throws. The second one is not cosmetic. `requestAnimationFrame` is rescheduled
+at the *end* of the frame body, so a single exception anywhere in it used to
+stop the loop for good — the game simply froze. That shipped once, from a
+one-line dangling variable in the damage-number overlay.
+
+`tools/e2e.html` boots the real game — real modules, real WebGL2 compilation,
+real canvas-2D overlay, real DOM — starts a run by clicking the actual LAUNCH
+button, and drives the game's own loop. Serve the directory and open:
+
+```
+http://localhost:8732/tools/e2e.html
+```
+
+It prints a pass/fail table. Add `?fresh=1` to wipe the save first and test the
+new-player path; the clear has to happen inside the harness, because a page
+being navigated away from re-saves its state on the way out.
+
+It fakes exactly two things, both of them reasons the game cannot otherwise run
+in an automated pane: `requestAnimationFrame` (which never fires there) becomes
+a steppable pump, and `innerWidth/Height` (which report 0) are pinned to a
+phone-sized viewport. Everything else is production code.
+
+Beyond "does it crash", it asserts hitstop stays under 8% of frames and that no
+single stall exceeds six. Those are game-feel limits, and both were measured
+against a real browser rather than guessed — freezing on every kill put 15% of
+frames on hold at level 35, which reads as a stutter, not as impact.
 
 ---
 

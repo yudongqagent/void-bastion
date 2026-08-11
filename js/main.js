@@ -225,7 +225,35 @@ let uiAccum = 0;
 let frames = 0;
 let fpsAccum = 0;
 
+// A throw anywhere in the frame body used to be fatal: requestAnimationFrame is
+// re-registered at the END of frame(), so one bad frame stopped the loop for
+// good and the game simply froze. The loop now always reschedules, reports the
+// first failure, and gives up only if every frame is failing.
+let frameErrors = 0;
+
 function frame(now) {
+  try {
+    step(now);
+  } catch (err) {
+    frameErrors++;
+    if (frameErrors === 1) {
+      console.error('[void-bastion] frame error', err);
+      window.VB_lastError = String((err && err.stack) || err);
+    }
+    // Twenty consecutive bad frames means it is not a transient glitch.
+    if (frameErrors > 20) { showFatal(err); return; }
+  }
+  requestAnimationFrame(frame);
+}
+
+function showFatal(err) {
+  const el = document.getElementById('bootError');
+  if (!el) return;
+  el.textContent = 'The game hit a repeated error and stopped: ' + err;
+  el.hidden = false;
+}
+
+function step(now) {
   const dt = Math.min(0.25, (now - last) / 1000);
   last = now;
 
@@ -265,7 +293,7 @@ function frame(now) {
   }
 
   state.tickSave(now);
-  requestAnimationFrame(frame);
+  frameErrors = 0;
 }
 requestAnimationFrame(frame);
 

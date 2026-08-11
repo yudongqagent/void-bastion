@@ -45,8 +45,13 @@ const REFERENCE_APPROACH = 430;
 // Hitstop: a brief global freeze on a significant kill. It is what turns a
 // state change ("that enemy is gone") into an impact ("I hit that"). Rendering
 // continues through it, so the player sees a held frame rather than a gap.
-const HITSTOP_MAX = 0.09;      // longest single freeze
-const FREEZE_BUDGET = 0.16;    // seconds of freeze allowed per real second
+const HITSTOP_MAX = 0.055;     // longest single freeze
+const FREEZE_BUDGET = 0.05;    // seconds of freeze allowed per real second
+// Below this significance a kill gets no freeze at all. Measured in a real
+// browser, freezing on every kill put 15% of frames on hold at wave 35 — which
+// is not punctuation, it is a stutter. Only kills that read as an event stop
+// the clock; chaff dies to sparks and sound alone.
+const HITSTOP_MIN_WEIGHT = 0.30;
 const SLOWMO_DUR = 1.1;        // boss-death ramp
 const SLOWMO_MIN = 0.30;       // time scale at the bottom of the ramp
 // Above this speed multiplier the boss ramp is skipped entirely: at 4x it would
@@ -1063,7 +1068,10 @@ export class Game {
         this.slowmo = SLOWMO_DUR;
       }
     } else {
-      this.addHitstop((0.018 + 0.055 * this.killWeight(e)) * (e.elite ? 1.5 : 1));
+      const weight = this.killWeight(e);
+      if (weight >= HITSTOP_MIN_WEIGHT || e.elite) {
+        this.addHitstop((0.012 + 0.05 * weight) * (e.elite ? 1.4 : 1));
+      }
     }
 
     // A bomber is a trap as much as a target: shoot it early or eat the blast.
@@ -2938,7 +2946,7 @@ export class Game {
       ctx.shadowColor = col;
       ctx.shadowBlur = 8;
       ctx.fillStyle = col;
-      ctx.fillText(f.text, f.x + sx, f.y + sy);
+      ctx.fillText(f.text, f.x, f.y);
     }
     ctx.restore();
   }
