@@ -17,7 +17,7 @@
 //      is decoration.
 import {
   loft, wing, nacelle, canopy, fin, pylon, store, plate, dome, barrel,
-  lamp, ring, orbit, expand,
+  lamp, orbit, expand,
 } from './airframe.js';
 
 // --- shared assemblies ---------------------------------------------------------
@@ -257,7 +257,6 @@ const shielder = [
     return lamp([Math.cos(a) * 0.42, Math.sin(a) * 0.42 + 0.12], 0.05, 2.6);
   }),
   nacelle({ p: [0.22, -0.54], len: 0.24, r: 0.075, mirror: true }),
-  ring({ r: 1.12, w: 0.05, tint: 'accent', alpha: 0.55 }),
 ];
 
 const warden = [
@@ -268,7 +267,6 @@ const warden = [
   fin({ p: [0.30, -0.20], len: 0.26, hw: 0.05, sweep: 0.08, h: 0.52, mirror: true }),
   nacelle({ p: [0.20, -0.56], len: 0.26, r: 0.08, mirror: true }),
   lamp([0, 0.34], 0.05, 2.4),
-  ring({ r: 1.05, w: 0.05, tint: 'accent', alpha: 0.5 }),
   orbit({ n: 3, r: 0.86, size: 0.09, speed: 1.1, m: 1 }),
 ];
 
@@ -338,7 +336,6 @@ const turret = [
   barrel({ p: [0.09, 0.20], len: 0.62, r: 0.05, h: 0.54, mirror: true }),
   plate({ p: [0, -0.30], hw: 0.20, hh: 0.12, h: 0.42, m: 0.9 }),
   lamp([0, -0.34], 0.05, 2.0),
-  ring({ r: 1.0, w: 0.04, tint: 'hull', alpha: 0.35 }),
 ];
 
 const sam = [
@@ -350,7 +347,6 @@ const sam = [
   store({ p: [0.26, 0.24], len: 0.34, r: 0.055, h: 0.52 }),
   dome({ p: [0, -0.36], r: 0.13, h: 0.40 }),
   lamp([0, -0.38], 0.045, 2.2),
-  ring({ r: 0.96, w: 0.035, tint: 'hull', alpha: 0.3 }),
 ];
 
 const tank = [
@@ -389,3 +385,105 @@ export const AIRFRAMES = {
 /** Flattened, mirrors resolved. Every consumer reads this. */
 export const AIRFRAME_PARTS = Object.fromEntries(
   Object.entries(AIRFRAMES).map(([k, v]) => [k, expand(v)]));
+
+// --- ground structures ----------------------------------------------------------
+//
+// The terrain was tinted polygons: an island was a green heptagon, a base was a
+// grey one with a stripe. Next to baked airframes that reads as a placeholder.
+// These are built from the same vocabulary and baked into the same atlas, so a
+// hangar on an island is lit and occluded exactly like a craft is.
+
+const hangar = [
+  plate({ p: [0, 0], hw: 0.62, hh: 0.44, h: 0.30, m: 0.92 }),
+  loft([[0.40, 0.60, 0.52], [0.10, 0.62, 0.56], [-0.20, 0.62, 0.56],
+        [-0.44, 0.58, 0.48]], { m: 1.0 }),               // barrel roof
+  plate({ p: [0, 0.46], hw: 0.56, hh: 0.06, h: 0.34, m: 0.8 }),  // door header
+  plate({ p: [0.30, 0.48], hw: 0.22, hh: 0.05, h: 0.20, m: 0.7, mirror: true }),
+  barrel({ p: [0.44, -0.48], len: 0.22, r: 0.03, ang: 0, h: 0.40, mirror: true }),
+  lamp([0.50, 0.42], 0.04, 2.0),
+  lamp([-0.50, 0.42], 0.04, 2.0),
+];
+
+const controlTower = [
+  plate({ p: [0, -0.30], hw: 0.34, hh: 0.30, h: 0.24, m: 0.85 }),
+  plate({ p: [0, -0.05], hw: 0.16, hh: 0.34, h: 0.52, m: 0.95 }),
+  plate({ p: [0, 0.34], hw: 0.30, hh: 0.20, h: 0.74, m: 1.05 }),   // glazed cab
+  canopy({ p: [0, 0.34], rx: 0.26, ry: 0.16, h: 0.80 }),
+  fin({ p: [0, 0.56], len: 0.34, hw: 0.022, sweep: 0, h: 0.96 }),  // mast
+  lamp([0, 0.70], 0.045, 2.8),
+  lamp([0.30, -0.36], 0.035, 1.6),
+  lamp([-0.30, -0.36], 0.035, 1.6),
+];
+
+const radar = [
+  plate({ p: [0, -0.44], hw: 0.30, hh: 0.20, h: 0.22, m: 0.85 }),
+  plate({ p: [0, -0.16], hw: 0.10, hh: 0.30, h: 0.44, m: 0.9 }),
+  dome({ p: [0, 0.22], r: 0.44, h: 0.62, m: 1.05 }),
+  plate({ p: [0, 0.22], hw: 0.40, hh: 0.05, h: 0.70, m: 0.75 }),
+  barrel({ p: [0, 0.22], len: 0.30, r: 0.025, h: 0.76 }),
+  lamp([0, 0.54], 0.04, 2.6),
+];
+
+const silo = [
+  plate({ p: [0, 0], hw: 0.60, hh: 0.50, h: 0.16, m: 0.8 }),
+  dome({ p: [-0.28, 0.16], r: 0.26, h: 0.62, m: 1.0 }),
+  dome({ p: [0.26, 0.14], r: 0.22, h: 0.56, m: 1.0 }),
+  dome({ p: [-0.02, -0.28], r: 0.20, h: 0.52, m: 0.95 }),
+  barrel({ p: [-0.28, 0.16], len: 0.30, r: 0.028, h: 0.68 }),
+  barrel({ p: [0.26, 0.14], len: 0.26, r: 0.026, h: 0.62 }),
+  lamp([-0.28, 0.30], 0.035, 2.2),
+  lamp([0.26, 0.26], 0.032, 2.0),
+];
+
+const crane = [
+  plate({ p: [0, -0.44], hw: 0.28, hh: 0.18, h: 0.20, m: 0.85 }),
+  plate({ p: [0, -0.20], hw: 0.14, hh: 0.26, h: 0.52, m: 0.95 }),
+  plate({ p: [0, 0.24], hw: 0.10, hh: 0.62, h: 0.72, m: 1.0 }),    // jib
+  plate({ p: [0, 0.78], hw: 0.20, hh: 0.08, h: 0.66, m: 0.9 }),
+  plate({ p: [0, -0.44], hw: 0.34, hh: 0.10, h: 0.26, m: 0.8 }),
+  barrel({ p: [0, 0.70], len: 0.30, r: 0.02, ang: Math.PI, h: 0.40 }),
+  lamp([0, 0.84], 0.035, 2.4),
+];
+
+const containers = [
+  plate({ p: [-0.34, 0.26], hw: 0.26, hh: 0.14, h: 0.34, m: 1.0 }),
+  plate({ p: [0.22, 0.30], hw: 0.28, hh: 0.13, h: 0.30, m: 0.92 }),
+  plate({ p: [-0.10, -0.04], hw: 0.30, hh: 0.14, h: 0.44, m: 1.05 }),
+  plate({ p: [0.36, -0.10], hw: 0.22, hh: 0.13, h: 0.32, m: 0.88 }),
+  plate({ p: [-0.30, -0.36], hw: 0.26, hh: 0.14, h: 0.30, m: 0.95 }),
+  plate({ p: [0.18, -0.40], hw: 0.24, hh: 0.12, h: 0.26, m: 1.0 }),
+];
+
+const bunker = [
+  plate({ p: [0, 0], hw: 0.50, hh: 0.38, h: 0.34, m: 0.95 }),
+  dome({ p: [0, 0.04], r: 0.30, h: 0.46, m: 1.0 }),
+  plate({ p: [0, 0.30], hw: 0.34, hh: 0.06, h: 0.40, m: 0.8 }),
+  barrel({ p: [0, 0.28], len: 0.26, r: 0.035, h: 0.44 }),
+  lamp([0.36, -0.24], 0.035, 1.8),
+  lamp([-0.36, -0.24], 0.035, 1.8),
+];
+
+const grove = [
+  dome({ p: [-0.30, 0.24], r: 0.28, h: 0.62, m: 1.0 }),
+  dome({ p: [0.24, 0.30], r: 0.22, h: 0.52, m: 0.92 }),
+  dome({ p: [0.34, -0.16], r: 0.30, h: 0.66, m: 1.05 }),
+  dome({ p: [-0.20, -0.30], r: 0.26, h: 0.56, m: 0.95 }),
+  dome({ p: [0.02, 0.00], r: 0.24, h: 0.60, m: 1.0 }),
+  dome({ p: [-0.44, -0.06], r: 0.18, h: 0.44, m: 0.88 }),
+];
+
+const outcrop = [
+  dome({ p: [0.06, 0.10], r: 0.46, h: 0.70, m: 1.0 }),
+  dome({ p: [-0.34, -0.12], r: 0.30, h: 0.52, m: 0.9 }),
+  dome({ p: [0.34, -0.30], r: 0.26, h: 0.44, m: 0.95 }),
+  dome({ p: [-0.12, 0.44], r: 0.22, h: 0.38, m: 0.86 }),
+];
+
+export const STRUCTURES = {
+  hangar, tower: controlTower, radar, silo, crane, containers, bunker,
+  grove, outcrop,
+};
+
+/** Structures share the airframe pipeline: same expansion, same bake, same atlas. */
+export const STRUCTURE_PARTS = Object.fromEntries(
+  Object.entries(STRUCTURES).map(([k, v]) => [k, expand(v)]));

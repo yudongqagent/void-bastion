@@ -23,7 +23,7 @@ import { createHash } from 'node:crypto';
 import { encodePNG, decodePNG } from './png.mjs';
 import { MATERIALS, clamp01 } from './materials.mjs';
 import { CRAFT_MATERIAL } from '../js/game/craft.js';
-import { AIRFRAME_PARTS } from '../js/game/airframes.js';
+import { AIRFRAME_PARTS, STRUCTURE_PARTS } from '../js/game/airframes.js';
 
 const TILE = 256;
 const SS = 3;                    // supersample factor
@@ -31,7 +31,11 @@ const HI = TILE * SS;
 const EXTENT = 1.35;             // local units mapped to the tile half-width
 const NOMINAL_RADIUS = 38;       // px a craft typically occupies on screen
 
-const TYPES = Object.keys(AIRFRAME_PARTS);
+// Structures ride in the same atlas as the craft: a hangar on an island should
+// be lit and occluded exactly the way an aircraft is, and sharing the pipeline
+// is the only way to guarantee that rather than hope for it.
+const ALL_PARTS = { ...AIRFRAME_PARTS, ...STRUCTURE_PARTS };
+const TYPES = Object.keys(ALL_PARTS);
 const GRID = Math.ceil(Math.sqrt(TYPES.length));
 const SIZE = TILE * GRID;
 
@@ -217,43 +221,107 @@ function evalPart(part, x, y) {
 }
 
 /**
- * Paint, as distinct from material.
+ * Paint schemes.
  *
- * A single hull tint over the whole craft is why they read as coloured blocks.
- * Real aircraft carry a scheme: a darker dorsal spine, lighter outboard panels,
- * a contrasting nose and tail band, an insignia. This multiplies the material,
- * so plating and panel lines still show through, and the archetype hull tint
- * still applies on top of the result.
+ * The craft were one flat tone each, and the cause was not over-saturated hull
+ * tints — those are already muted (0.26-0.42) — but that nothing varied HUE
+ * across an airframe. The old livery multiplied brightness only, so a craft was
+ * one colour at several exposures.
+ *
+ * Each class now gets a real scheme: an upper surface, lighter outboard panels,
+ * a dark dielectric radome at the nose, bare-metal leading edges, and coloured
+ * trim. The material still supplies the detail — panel lines, grain, wear — but
+ * as a LUMINANCE modulation rather than as the colour itself.
  */
-function livery(x, y, type) {
-  let k = 1;
-  // Dorsal shadow line down the spine, and lighter outboard skin.
-  const ax = Math.abs(x);
-  k *= 0.88 + 0.26 * clamp01(ax / 0.55);
-  // Nose and tail bands.
-  if (y > 0.62) k *= 1.16;
-  if (y < -0.62) k *= 0.84;
-  // Wing walkway: a darker strip just outboard of the root.
-  if (ax > 0.24 && ax < 0.34) k *= 0.90;
+const SCHEMES = {
+  ship:       { top: [0.46, 0.52, 0.60], low: [0.74, 0.78, 0.84], trim: [1.25, 0.62, 0.22] },
+  drone:      { top: [0.40, 0.43, 0.46], low: [0.64, 0.66, 0.68], trim: [1.10, 0.72, 0.22] },
+  darter:     { top: [0.50, 0.44, 0.34], low: [0.78, 0.72, 0.58], trim: [1.15, 0.50, 0.20] },
+  mite:       { top: [0.44, 0.46, 0.48], low: [0.66, 0.68, 0.70], trim: [1.05, 0.68, 0.24] },
+  wraith:     { top: [0.20, 0.21, 0.26], low: [0.34, 0.36, 0.44], trim: [0.60, 0.55, 1.10] },
+  lancer:     { top: [0.38, 0.42, 0.50], low: [0.62, 0.68, 0.76], trim: [1.20, 0.55, 0.30] },
+  sniper:     { top: [0.36, 0.40, 0.44], low: [0.60, 0.64, 0.70], trim: [1.15, 0.60, 0.25] },
+  splitter:   { top: [0.36, 0.46, 0.38], low: [0.60, 0.72, 0.62], trim: [0.55, 1.20, 0.55] },
+  sentinel:   { top: [0.48, 0.44, 0.34], low: [0.76, 0.70, 0.56], trim: [1.20, 0.80, 0.25] },
+  brute:      { top: [0.38, 0.38, 0.46], low: [0.62, 0.62, 0.72], trim: [0.85, 0.50, 1.20] },
+  gunship:    { top: [0.36, 0.40, 0.30], low: [0.58, 0.62, 0.46], trim: [1.10, 0.85, 0.30] },
+  bomber:     { top: [0.42, 0.40, 0.30], low: [0.66, 0.62, 0.46], trim: [1.30, 0.85, 0.20] },
+  radial:     { top: [0.32, 0.34, 0.40], low: [0.54, 0.56, 0.66], trim: [1.20, 0.40, 0.35] },
+  shielder:   { top: [0.40, 0.46, 0.58], low: [0.66, 0.74, 0.88], trim: [0.45, 0.90, 1.30] },
+  warden:     { top: [0.52, 0.46, 0.28], low: [0.82, 0.74, 0.44], trim: [0.40, 1.20, 1.00] },
+  dread:      { top: [0.34, 0.36, 0.42], low: [0.56, 0.60, 0.68], trim: [1.25, 0.45, 0.30] },
+  juggernaut: { top: [0.36, 0.36, 0.40], low: [0.60, 0.60, 0.66], trim: [0.90, 0.50, 1.20] },
+  boss:       { top: [0.34, 0.32, 0.32], low: [0.58, 0.55, 0.52], trim: [1.35, 0.70, 0.15] },
+  turret:     { top: [0.42, 0.43, 0.40], low: [0.62, 0.63, 0.58], trim: [1.10, 0.70, 0.25] },
+  sam:        { top: [0.40, 0.42, 0.38], low: [0.60, 0.62, 0.56], trim: [1.15, 0.55, 0.25] },
+  tank:       { top: [0.34, 0.38, 0.30], low: [0.54, 0.60, 0.46], trim: [1.05, 0.75, 0.28] },
+  warship:    { top: [0.40, 0.40, 0.42], low: [0.62, 0.62, 0.64], trim: [1.10, 0.60, 0.25] },
 
-  // Squadron insignia — a roundel on each wing. Small, high contrast, and the
-  // single most "built by someone" detail on the airframe.
-  const rx = ax - 0.52, ry = y - 0.02;
-  const rr = Math.hypot(rx, ry);
-  let tint = [k, k, k];
-  if (rr < 0.10) {
-    const ring = rr > 0.062 && rr < 0.092;
-    const core = rr < 0.042;
-    if (ring || core) tint = [k * 1.35, k * 0.72, k * 0.55];
-    else tint = [k * 1.12, k * 1.10, k * 1.06];
+  hangar:     { top: [0.46, 0.48, 0.50], low: [0.66, 0.68, 0.70], trim: [1.10, 0.72, 0.22] },
+  tower:      { top: [0.56, 0.57, 0.56], low: [0.74, 0.75, 0.74], trim: [1.20, 0.35, 0.25] },
+  radar:      { top: [0.60, 0.62, 0.64], low: [0.80, 0.82, 0.84], trim: [1.10, 0.60, 0.25] },
+  silo:       { top: [0.62, 0.63, 0.62], low: [0.82, 0.83, 0.82], trim: [1.15, 0.55, 0.20] },
+  crane:      { top: [0.70, 0.58, 0.20], low: [0.90, 0.76, 0.28], trim: [0.30, 0.30, 0.32] },
+  containers: { top: [0.42, 0.50, 0.56], low: [0.66, 0.74, 0.80], trim: [1.05, 0.60, 0.28] },
+  bunker:     { top: [0.44, 0.46, 0.42], low: [0.62, 0.64, 0.58], trim: [0.95, 0.65, 0.28] },
+  grove:      { top: [0.20, 0.34, 0.18], low: [0.34, 0.52, 0.26], trim: [0.26, 0.40, 0.20] },
+  outcrop:    { top: [0.42, 0.40, 0.36], low: [0.62, 0.59, 0.53], trim: [0.50, 0.47, 0.43] },
+};
+const DEFAULT_SCHEME = SCHEMES.drone;
+
+/** Paint colour at a point, before the material's detail is applied. */
+const STRUCTURE_SET = new Set(['hangar', 'tower', 'radar', 'silo', 'crane',
+  'containers', 'bunker', 'grove', 'outcrop']);
+
+function paintAt(x, y, type) {
+  const sc = SCHEMES[type] || DEFAULT_SCHEME;
+  const ax = Math.abs(x);
+  if (STRUCTURE_SET.has(type)) {
+    // Buildings get the two-tone and nothing else — no radome, no spine stripe,
+    // and emphatically no squadron roundel on a fuel tank.
+    const t = clamp01((ax - 0.08) / 0.46);
+    return [sc.top[0] + (sc.low[0] - sc.top[0]) * t,
+      sc.top[1] + (sc.low[1] - sc.top[1]) * t,
+      sc.top[2] + (sc.low[2] - sc.top[2]) * t];
   }
-  return tint;
+
+  // Upper surfaces dark, outboard skin light — the standard two-tone that makes
+  // an airframe read as having a top and a side.
+  const t = clamp01((ax - 0.10) / 0.42);
+  let r = sc.top[0] + (sc.low[0] - sc.top[0]) * t;
+  let g = sc.top[1] + (sc.low[1] - sc.top[1]) * t;
+  let b = sc.top[2] + (sc.low[2] - sc.top[2]) * t;
+
+  // Dark dielectric radome over the nose.
+  if (y > 0.74) {
+    const k = clamp01((y - 0.74) / 0.30);
+    r = r * (1 - k) + 0.20 * k; g = g * (1 - k) + 0.21 * k; b = b * (1 - k) + 0.24 * k;
+  }
+  // Bare metal around the exhaust, heat-stained.
+  if (y < -0.56) {
+    const k = clamp01((-0.56 - y) / 0.36);
+    r = r * (1 - k) + 0.52 * k; g = g * (1 - k) + 0.50 * k; b = b * (1 - k) + 0.50 * k;
+  }
+  // Trim stripe along the spine, and a band across the tail.
+  if (ax < 0.045) { r = sc.trim[0] * 0.55; g = sc.trim[1] * 0.55; b = sc.trim[2] * 0.55; }
+  if (y > -0.50 && y < -0.42) { r = sc.trim[0] * 0.7; g = sc.trim[1] * 0.7; b = sc.trim[2] * 0.7; }
+  // Wing walkway.
+  if (ax > 0.24 && ax < 0.31) { r *= 0.82; g *= 0.82; b *= 0.82; }
+
+  // Squadron roundel on each wing — the single most "built by someone" detail.
+  const rr = Math.hypot(ax - 0.52, y - 0.02);
+  if (rr < 0.095) {
+    if (rr < 0.040) { r = 1.25; g = 0.35; b = 0.28; }
+    else if (rr < 0.066) { r = 0.92; g = 0.92; b = 0.94; }
+    else { r = 0.30; g = 0.36; b = 0.72; }
+  }
+  return [r, g, b];
 }
 
 // --- bake one craft ------------------------------------------------------------
 
 function bakeCraft(type) {
-  const parts = AIRFRAME_PARTS[type];
+  const parts = ALL_PARTS[type];
   const [matLayer, repeatPx] = CRAFT_MATERIAL[type] || [0, 24];
   const matSeed = 1000 + matLayer * 137;
   const matRepeats = (2 * NOMINAL_RADIUS) / repeatPx;
@@ -295,8 +363,15 @@ function bakeCraft(type) {
       const mv = ((ly / (2 * EXTENT)) + 0.5) * matRepeats;
       const m = MATERIALS[layer].fn(mu - Math.floor(mu), mv - Math.floor(mv), seed);
       const k = bestPart.m || 1;
-      const liv = livery(lx, ly, type);
-      Cr[i] = m.r * k * liv[0]; Cg[i] = m.g * k * liv[1]; Cb[i] = m.b * k * liv[2];
+      const detail = (m.r + m.g + m.b) / 3;
+      const mx = Math.max(m.r, m.g, m.b), mn = Math.min(m.r, m.g, m.b);
+      // How much colour the material itself carries. Rust, thermal foil and
+      // hazard stripes must keep theirs; plain plate should take the paint.
+      const chroma = clamp01((mx - mn) / (mx + 1e-6) * 3.4);
+      const paint = paintAt(lx, ly, type);
+      Cr[i] = (paint[0] * detail * (1 - chroma) + m.r * chroma) * k;
+      Cg[i] = (paint[1] * detail * (1 - chroma) + m.g * chroma) * k;
+      Cb[i] = (paint[2] * detail * (1 - chroma) + m.b * chroma) * k;
       Ro[i] = m.rough;
     }
   }
@@ -461,8 +536,10 @@ TYPES.forEach((type, idx) => {
 console.log(`\n  craft bake — ${TYPES.length} classes, ${SIZE}x${SIZE} (${GRID}x${GRID} of ${TILE}px)\n`);
 let bad = 0;
 for (const r of report) {
-  // A blank bake and a solid square are both silent failures.
-  const warn = r.coverage < 0.08 ? '  <-- NEARLY EMPTY'
+  // A blank bake and a solid square are both silent failures. The floor is 5%
+  // rather than 8% because thin structures — a crane, a mast — legitimately
+  // cover very little of their tile.
+  const warn = r.coverage < 0.05 ? '  <-- NEARLY EMPTY'
     : r.coverage > 0.75 ? '  <-- NEARLY SOLID' : '';
   if (warn) bad++;
   console.log(`  ${String(r.layer).padStart(2)}  ${r.type.padEnd(12)} coverage ${(r.coverage * 100).toFixed(1)}%${warn}`);

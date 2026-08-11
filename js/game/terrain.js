@@ -41,7 +41,35 @@ function makeIsland(rng, x, w) {
       rot: rng() * TAU,
     });
   }
-  return { kind: 'island', x, w, lobes };
+  // Islands are inhabited: groves and rock outcrops, placed inside the lobes so
+  // nothing floats off the coast.
+  const props = [];
+  for (const l of lobes) {
+    const n = rng() < 0.55 ? 2 : 1;
+    for (let i = 0; i < n; i++) {
+      const a = rng() * Math.PI * 2, d = l.r * 0.5 * rng();
+      props.push({
+        type: rng() < 0.62 ? 'grove' : 'outcrop',
+        dx: l.dx + Math.cos(a) * d, dy: l.dy + Math.sin(a) * d,
+        r: l.r * (0.18 + rng() * 0.16), rot: rng() * Math.PI * 2,
+      });
+    }
+  }
+  return { kind: 'island', x, w, lobes, props };
+}
+
+/** Airfield furniture: what a base is actually made of. */
+function baseProps(rng, w) {
+  const out = [];
+  const put = (type, dx, dy, r, rot = 0) => out.push({ type, dx, dy, r: w * r, rot });
+  put('tower', (rng() - 0.5) * w * 0.5, w * 0.30, 0.13);
+  put('hangar', -w * (0.20 + rng() * 0.12), -w * 0.10, 0.17, rng() * 0.3 - 0.15);
+  if (rng() < 0.75) put('hangar', w * (0.22 + rng() * 0.10), -w * 0.22, 0.15, rng() * 0.3 - 0.15);
+  if (rng() < 0.7) put('radar', w * (rng() - 0.5) * 0.5, -w * 0.34, 0.10);
+  if (rng() < 0.65) put('silo', -w * (0.26 + rng() * 0.1), w * 0.22, 0.12);
+  if (rng() < 0.6) put('containers', w * (0.24 + rng() * 0.1), w * 0.16, 0.11);
+  if (rng() < 0.5) put('bunker', w * (rng() - 0.5) * 0.6, -w * 0.40, 0.10);
+  return out;
 }
 
 function makeBase(rng, x, w) {
@@ -57,7 +85,7 @@ function makeBase(rng, x, w) {
     });
   }
   return {
-    kind: 'base', x, w, pads,
+    kind: 'base', x, w, pads, props: baseProps(rng, w),
     runway: { dx: (rng() - 0.5) * w * 0.3, len: w * (0.5 + rng() * 0.4), rot: (rng() - 0.5) * 0.5 },
   };
 }
@@ -68,7 +96,15 @@ function makeConvoy(rng, x, w) {
   for (let i = 0; i < n; i++) {
     ships.push({ dx: (rng() - 0.5) * w * 0.8, dy: i * w * 0.42 - w * 0.3, len: w * 0.24, rot: (rng() - 0.5) * 0.25 });
   }
-  return { kind: 'convoy', x, w, ships };
+  // Deck cargo, so a convoy reads as freight rather than as grey bars.
+  const props = [];
+  for (const sh of ships) {
+    if (rng() < 0.8) props.push({ type: 'containers', dx: sh.dx, dy: sh.dy + sh.len * 0.12,
+      r: sh.len * 0.30, rot: sh.rot });
+    if (rng() < 0.4) props.push({ type: 'crane', dx: sh.dx, dy: sh.dy - sh.len * 0.35,
+      r: sh.len * 0.26, rot: sh.rot });
+  }
+  return { kind: 'convoy', x, w, ships, props };
 }
 
 function makeReef(rng, x, w) {
@@ -80,7 +116,10 @@ function makeReef(rng, x, w) {
       r: w * (0.05 + rng() * 0.09), sides: 5 + ((rng() * 3) | 0), rot: rng() * TAU,
     });
   }
-  return { kind: 'reef', x, w, rocks };
+  const props = rocks.filter(() => rng() < 0.5).map((rk) => ({
+    type: 'outcrop', dx: rk.dx, dy: rk.dy, r: rk.r * 0.8, rot: rng() * Math.PI * 2,
+  }));
+  return { kind: 'reef', x, w, rocks, props };
 }
 
 const BUILDERS = [makeIsland, makeIsland, makeBase, makeConvoy, makeReef];
@@ -196,7 +235,7 @@ export class Terrain {
     }
   }
 
-  render(R, pal, time, y0, y1) {
+  render(R, pal, time, y0, y1, layerOf = null) {
     for (const f of this.features) {
       // Off-screen features are still in the list waiting to scroll in; drawing
       // them is pure overdraw on the most fill-heavy shapes in the game.
@@ -252,6 +291,19 @@ export class Terrain {
               MAT.ISLAND, 40);
           }
           break;
+        }
+      }
+
+      // Structures, drawn from the same baked atlas the craft use, so a hangar
+      // on an island is lit and shadowed exactly like an aircraft is.
+      if (layerOf && f.props) {
+        for (const pr of f.props) {
+          const layer = layerOf(pr.type);
+          if (layer < 0) continue;
+          const px = f.x + pr.dx, py = f.y + pr.dy;
+          const size = pr.r * 1.35;
+          R.craftShadow(px + pr.r * 0.28, py + pr.r * 0.22, size, pr.rot, layer, 0.34);
+          R.craft(px, py, size, pr.rot, layer, 1, 1, 1, 1, [1.1, 0.95, 0.7]);
         }
       }
     }

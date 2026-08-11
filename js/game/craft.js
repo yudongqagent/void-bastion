@@ -89,6 +89,17 @@ export const CRAFT_MATERIAL = {
   tank:       [5, 26],   // military camo
   warship:    [6, 34],   // oxidised iron — sea-worn
   sam:        [11, 26],  // concrete
+
+  // Ground structures.
+  hangar:     [0, 30],   // painted plate
+  tower:      [11, 26],  // concrete
+  radar:      [1, 22],   // brushed steel
+  silo:       [1, 30],   // brushed steel tanks
+  crane:      [15, 24],  // hazard stripe — cranes are marked
+  containers: [0, 18],   // painted plate
+  bunker:     [11, 30],  // concrete
+  grove:      [12, 34],  // rock, tinted green at draw time
+  outcrop:    [12, 40],  // rock
 };
 
 /** Materials used by things that are not craft. */

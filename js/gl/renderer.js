@@ -178,7 +178,11 @@ vec4 craftSprite(vec3 tint, vec3 accent) {
   vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
   float spec = pow(max(dot(N, H), 0.0), mix(80.0, 6.0, rough)) * (1.0 - rough) * 1.1;
 
-  vec3 rgb = tint * alb.rgb * 1.74 * diff + spec * mix(vec3(1.0), tint, 0.45);
+  // Partial tint. Multiplying a dark hull colour over the whole sprite is what
+  // reduced every craft to one flat tone; the baked paint scheme has to survive
+  // it. Archetype colour still shifts the craft, it no longer replaces it.
+  vec3 hue = mix(vec3(1.0), tint * 2.5, 0.55);
+  vec3 rgb = hue * alb.rgb * 1.58 * diff + spec * mix(vec3(1.0), hue, 0.45);
   // Running lights: added, not substituted, and only where the mask is strong.
   // Replacing the hull across the whole dot at accent*2.2 blew each craft out
   // into a single glowing ellipse once bloom got hold of it.

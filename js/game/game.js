@@ -95,7 +95,6 @@ const COLORS = {
   shield:   [0.35, 0.85, 1.50],
   coin:     [1.50, 1.15, 0.35],
   repair:   [0.30, 1.45, 0.70],
-  debris:   [0.42, 0.40, 0.46],
   laser:    [0.45, 1.35, 1.75],
   missile:  [1.60, 0.80, 0.25],
   flak:     [1.55, 1.10, 0.30],
@@ -136,7 +135,7 @@ const newEnemy = () => ({
   behavior: 'dive', t: 0, homeX: 0, amp: 0, freq: 0, holdY: 0, face: 0,
   ground: false, hull: null, accent: null, smokeT: 0,
   blast: 0, aura: 0, warded: 0, pack: 1, lastX: null,
-  kx: 0, ky: 0, hitFlashMax: 0.12, hitPower: 0,
+  kx: 0, ky: 0, hitFlashMax: 0.12, hitPower: 0, shieldHit: 0, shieldAng: 0,
   weapon: null, wcd: 0, elite: false, burst: 0, burstT: 0, spin2: 0, bossDef: null,
 });
 
@@ -162,10 +161,6 @@ const newWreck = () => ({
   rot: 0, r: 1, g: 1, b: 1, burn: 0, smoke: 0,
 });
 
-const newDebris = () => ({
-  active: false, x: 0, y: 0, vy: 0, r: 0, angle: 0, spin: 0, sides: 6,
-  hp: 0, maxHp: 0, flash: 0,
-});
 
 export class Game {
   constructor(state, synth, renderer) {
@@ -177,7 +172,6 @@ export class Game {
     this.bullets = fastPool(newBullet, 500);
     this.particles = fastPool(newParticle, 1800);
     this.pickups = fastPool(newPickup, 320);
-    this.debris = fastPool(newDebris, 40);
     this.wrecks = fastPool(newWreck, 200);
 
     this.floaters = [];
@@ -389,44 +383,7 @@ export class Game {
     }
   }
 
-  spawnDebris() {
-    const d = this.debris.obtain();
-    d.active = true;
-    d.r = 16 + Math.random() * 34;
-    // Shootable. A rock you can break is an opportunity; one you can only be
-    // hit by is a tax on idling — and the Asteroid Belt was ending runs at
-    // wave 15 before this, which is exactly the hard-counter we ruled out.
-    d.maxHp = enemyHP(this.state.run.wave) * 1.6;
-    d.hp = d.maxHp;
-    d.flash = 0;
-    d.x = this.x0 + d.r + Math.random() * (this.fieldW - d.r * 2);
-    d.y = this.y0 - d.r - 20;
-    d.vy = (0.55 + Math.random() * 0.4);   // multiplier on scroll speed
-    d.angle = Math.random() * TAU;
-    d.spin = (Math.random() - 0.5) * 0.8;
-    d.sides = 5 + ((Math.random() * 3) | 0);
-  }
 
-  /** Shatter a rock, scattering ore worth collecting. */
-  breakDebris(d) {
-    d.active = false;
-    this.spawnExplosion(d.x, d.y, d.r, COLORS.debris, d.r > 38);
-    this.synth.kill(d.r > 38);
-    const ore = coinValue(this.state.run.wave) * 0.9 * (this.sector.coinMult || 1);
-    for (let i = 0; i < 2; i++) {
-      const p = this.pickups.obtain();
-      p.active = true;
-      p.kind = 'coin';
-      p.value = ore / 2;
-      p.x = d.x + (Math.random() - 0.5) * d.r;
-      p.y = d.y + (Math.random() - 0.5) * d.r;
-      p.vx = (Math.random() - 0.5) * 110;
-      p.vy = -30 - Math.random() * 60;
-      p.life = 9;
-      p.angle = Math.random() * TAU;
-      p.spin = (Math.random() - 0.5) * 5;
-    }
-  }
 
   // --- wave flow -------------------------------------------------------------
 
@@ -435,7 +392,7 @@ export class Game {
     const level = levelOf(wave);
     // Self-healing rather than only on a boundary: a run resumed from a save
     // starts mid-level, and keying purely off the boundary left it flying
-    // through the Asteroid Belt with Outer Reach's palette and no debris.
+    // through the Asteroid Belt with Outer Reach's palette.
     if (this.sector.id !== sectorForLevel(level).id || firstStepOfLevel(wave)) {
       this.enterSector(wave);
     }
@@ -600,6 +557,7 @@ export class Game {
     e.aura = def.aura || 0;
     e.warded = 0;
     e.kx = 0; e.ky = 0; e.hitPower = 0; e.hitFlashMax = 0.12;
+    e.shieldHit = 0; e.shieldAng = 0;
     e.bossDef = def.bossDef || null;
     e.weapon = def.weapon || null;
     e.wcd = 0.6 + Math.random() * 1.4;
@@ -712,16 +670,7 @@ export class Game {
       ax += (dx >= 0 ? 1 : -1) * urgency * 4200;
     }
 
-    for (const d of this.debris.items) {
-      if (!d.active) continue;
-      const dx = ship.x - d.x, dy = ship.y - d.y;
-      const dist = Math.hypot(dx, dy);
-      const reach = d.r + look * 0.7;
-      if (dist > reach) continue;
-      const urgency = 1 - dist / reach;
-      ax += (dx / (dist || 1)) * urgency * urgency * 3000;
-      ay += (dy / (dist || 1)) * urgency * urgency * 1100;
-    }
+
 
     // 3 — loose pickups worth a detour
     let bestP = null, bestD = 1e9;
@@ -1020,7 +969,15 @@ export class Game {
       const absorbed = Math.min(e.shield, amount);
       e.shield -= absorbed;
       amount -= absorbed;
-      if (absorbed > 0) this.synth.shieldHit();
+      if (absorbed > 0) {
+        this.synth.shieldHit();
+        // A shield that is always visible is a ring around the craft; a shield
+        // that appears where it was struck is an event. Record the impact
+        // bearing so the flare can be drawn facing the incoming fire.
+        e.shieldHit = 0.28;
+        e.shieldAng = dir ? Math.atan2(dir[1], dir[0])
+          : Math.atan2(e.y - this.ship.y, e.x - this.ship.x);
+      }
     }
     e.hp -= amount;
 
@@ -1334,7 +1291,7 @@ export class Game {
 
       const ox = w.x - e.x, oy = w.y - e.y;
       const od = Math.hypot(ox, oy) || 1;
-      const push = 40 + this.fxRandom() * 90;
+      const push = 70 + this.fxRandom() * 130;
       w.vx = (e.vx || 0) * 0.6 + (ox / od) * push + (this.fxRandom() - 0.5) * 40;
       w.vy = (e.vy || 0) * 0.6 + (oy / od) * push + (this.fxRandom() - 0.5) * 40;
       // Pieces thrown from further off-centre tumble harder.
@@ -1351,7 +1308,8 @@ export class Game {
       w.alt = 1;
       w.maxLife = w.life = 1.15 + this.fxRandom() * 0.5;
       const m = bd.m * wear;
-      w.r = e.color[0] * m; w.g = e.color[1] * m; w.b = e.color[2] * m;
+      const hc = e.hull || e.color;
+      w.r = hc[0] * m; w.g = hc[1] * m; w.b = hc[2] * m;
       w.burn = 0.5 + this.fxRandom() * 0.5;
       w.smoke = 0;
     }
@@ -1390,28 +1348,26 @@ export class Game {
    * that lands on water throws a splash, debris that lands on rock scorches it.
    */
   wreckImpact(w) {
+    // No expanding ring. An animated circle at every landing point pulled the
+    // eye away from the fight, and there can be forty of them at once.
     const size = Math.max(w.hh, w.r0, 4);
     if (this.terrain.surfaceAt(w.x, w.y) === 'water') {
-      this.spawnRing(w.x, w.y, size * 2.2, [0.75, 0.95, 1.1], 0.4);
-      this.spawnParticle(w.x, w.y, 0, 0, 0.22, size * 1.5, [0.9, 1.0, 1.1], 1, 2);
-      const n = 4 + ((this.fxRandom() * 3) | 0);
-      for (let i = 0; i < n; i++) {
-        const a = -Math.PI / 2 + (this.fxRandom() - 0.5) * 2.2;
-        const sp = 50 + this.fxRandom() * 90;
+      this.spawnParticle(w.x, w.y, 0, 0, 0.16, size * 1.1, [0.85, 0.95, 1.1], 1, 2);
+      for (let i = 0; i < 3; i++) {
+        const a = -Math.PI / 2 + (this.fxRandom() - 0.5) * 1.8;
+        const sp = 40 + this.fxRandom() * 60;
         this.spawnParticle(w.x, w.y, Math.cos(a) * sp, Math.sin(a) * sp,
-          0.3, 1.5 + this.fxRandom() * 2, [0.8, 0.95, 1.1], 0.92, 1);
+          0.22, 1.2 + this.fxRandom() * 1.4, [0.8, 0.95, 1.1], 0.92, 1);
       }
       this.synth.splash();
     } else {
-      this.spawnParticle(w.x, w.y, 0, 0, 0.3, size * 1.7, [1.5, 0.7, 0.25], 1, 2);
-      for (let i = 0; i < 6; i++) {
+      this.spawnParticle(w.x, w.y, 0, 0, 0.18, size * 1.2, [1.3, 0.65, 0.25], 1, 2);
+      for (let i = 0; i < 3; i++) {
         const a = this.fxRandom() * TAU;
-        const sp = 30 + this.fxRandom() * 70;
+        const sp = 25 + this.fxRandom() * 50;
         this.spawnParticle(w.x, w.y, Math.cos(a) * sp, Math.sin(a) * sp,
-          0.45 + this.fxRandom() * 0.4, 2.5 + this.fxRandom() * 3,
-          [0.42, 0.36, 0.30], 0.9, 1);
+          0.3, 2 + this.fxRandom() * 2, [0.42, 0.36, 0.30], 0.9, 1);
       }
-      this.spawnRing(w.x, w.y, size * 1.6, [0.5, 0.38, 0.28], 0.55);
       this.synth.thud();
     }
   }
@@ -1533,22 +1489,6 @@ export class Game {
     const sec = this.sector;
     const scroll = this.scrollSpeed * (sec.scrollMult || 1);
 
-    // Drifting rock. Purely a hazard — it never blocks your shots, so it is
-    // spectacle and dodging practice rather than a damage check.
-    if (sec.debris > 0 && Math.random() < dt * sec.debris * 0.17) this.spawnDebris();
-    for (const d of this.debris.items) {
-      if (!d.active) continue;
-      d.y += scroll * d.vy * dt;
-      d.angle += d.spin * dt;
-      if (d.flash > 0) d.flash -= dt;
-      if (d.y - d.r > this.y1 + 40) { d.active = false; continue; }
-      const dx = this.ship.x - d.x, dy = this.ship.y - d.y;
-      if (Math.hypot(dx, dy) < d.r + this.ship.radius) {
-        this.damageShip(enemyDamage(this.state.run.wave) * 0.7 * TUNING.CONTACT_SCALE, null);
-        this.breakDebris(d);
-      }
-    }
-
     // Ion Storm: an arc sweeps the lane and stuns whatever it crosses. A
     // benefit to the player, offsetting the zone's faster enemies.
     if (sec.effect === 'storm') {
@@ -1641,22 +1581,6 @@ export class Game {
         continue;
       }
 
-      let consumed = false;
-      for (const d of this.debris.items) {
-        if (!d.active || b.hits.has(d)) continue;
-        const ddx = d.x - b.x, ddy = d.y - b.y;
-        if (ddx * ddx + ddy * ddy <= (d.r + b.radius) ** 2) {
-          b.hits.add(d);
-          d.hp -= b.dmg;
-          d.flash = 0.1;
-          this.spawnParticle(b.x, b.y, (Math.random() - 0.5) * 90, (Math.random() - 0.5) * 90,
-            0.18, 2.5, COLORS.debris, 0.9, 1);
-          if (d.hp <= 0) this.breakDebris(d);
-          if (--b.pierce <= 0) { b.active = false; consumed = true; }
-          break;
-        }
-      }
-      if (consumed) continue;
 
       if (b.homing > 0) {
         // Player ordnance hunts the nearest live target.
@@ -1755,6 +1679,7 @@ export class Game {
       e.t += dt;
       if (e.hitFlash > 0) e.hitFlash -= dt;
       if (e.hitPower > 0) e.hitPower = Math.max(0, e.hitPower - dt * 4);
+      if (e.shieldHit > 0) e.shieldHit = Math.max(0, e.shieldHit - dt);
 
       // Recoil offset springs back fast, so a shove reads as a jolt rather
       // than as the craft being blown off course.
@@ -2461,8 +2386,8 @@ export class Game {
     const pal = groundFor(this.sector.id);
     this.terrain.renderWater(R, pal, time, this.x0, this.x1, this.y0, this.y1, this.scroll);
     this.renderBackdrop(time);
-    this.terrain.render(R, pal, time, this.y0, this.y1);
-    this.renderDebris();
+    this.terrain.render(R, pal, time, this.y0, this.y1,
+      R.craftReady ? (t) => this.craftLayer(t) : null);
     this.renderWrecks();
     this.renderPickups(time);
     this.renderEnemies(time);
@@ -2512,22 +2437,6 @@ export class Game {
         px = nx; py = ny;
       }
       R.glow(this.cx, y, this.fieldW * 0.6, 0.4, 0.7, 1.5, k * 0.18, 2.2);
-    }
-  }
-
-  renderDebris() {
-    const R = this.renderer;
-    const c = COLORS.debris;
-    for (const d of this.debris.items) {
-      if (!d.active) continue;
-      const hit = d.flash > 0 ? 1.6 : 0;
-      const frac = d.maxHp ? Math.max(0, d.hp / d.maxHp) : 1;
-      R.glow(d.x, d.y, d.r * 2.1, c[0] + hit, c[1] + hit, c[2] + hit, 0.16, 2.2);
-      R.poly(d.x, d.y, d.r, d.sides, d.angle, c[0] + hit, c[1] + hit, c[2] + hit, 0.9);
-      if (frac < 0.999) {
-        R.ring(d.x, d.y, d.r + 5, 1.2 * frac, 1.4, 0.7, 0.3, 0.6);
-      }
-      R.ring(d.x, d.y, d.r * 0.55, 1.2, c[0] * 1.3, c[1] * 1.3, c[2] * 1.4, 0.3);
     }
   }
 
@@ -2699,7 +2608,11 @@ export class Game {
 
     for (const e of this.enemies.items) {
       if (!e.active) continue;
-      let [r, g, b] = e.boss && e.bossDef ? e.bossDef.accent : e.color;
+      // The HULL tint, not the neon accent. COLORS.* are display colours above
+      // 1.0 that exist to bloom — using one as the body tint multiplied a hot
+      // pink over the whole airframe, which is what made every enemy read as a
+      // single saturated block regardless of its paint scheme.
+      let [r, g, b] = e.boss && e.bossDef ? e.bossDef.hull || e.hull : (e.hull || e.color);
       let alpha = 1;
 
       if (e.phase) alpha = Math.sin(e.phaseT) > 0.55 ? 0.22 : 0.85;
@@ -2739,28 +2652,53 @@ export class Game {
         }
       }
 
+      if (e.shieldHit > 0) {
+        // A brief hex-facet flare on the struck side. Three short arc segments
+        // spanning about 100 degrees read as a panel of the shield lighting up,
+        // which is the moment worth showing — the shield merely existing is not.
+        const k = e.shieldHit / 0.28;
+        const R0 = e.radius * 1.18;
+        for (let i = -1; i <= 1; i++) {
+          const a = e.shieldAng + i * 0.42;
+          const px = e.x + Math.cos(a) * R0, py = e.y + Math.sin(a) * R0;
+          R.slabLit(px, py, e.radius * 0.30 * k, 1.5 + k * 1.4, a + Math.PI / 2,
+            0.45, 1.0, 1.9, (0.30 + 0.55 * k) * alpha, 0);
+        }
+        R.glow(e.x + Math.cos(e.shieldAng) * R0, e.y + Math.sin(e.shieldAng) * R0,
+          e.radius * 0.7 * k, 0.5, 1.1, 2.0, 0.30 * k * alpha, 2.0);
+      }
+
+      // Status is shown ON the craft rather than as a halo around it. Rings
+      // circling every airframe read as interface furniture and flatten the
+      // silhouette work they sit on top of.
       if (e.warded) {
-        // A sheltered craft wears the warden's colour, so "why is this not
-        // dying" has a visible answer.
-        R.ring(e.x, e.y, e.radius * 1.28, 1.2, 0.35, 1.5, 1.25, 0.55 * alpha);
+        // Warden cover: a cold sheen over the hull.
+        R.glow(e.x, e.y, e.radius * 1.05, 0.30, 1.35, 1.15, 0.16 * alpha, 2.6);
       }
       if (e.elite) {
-        // Gold chevron ring: at a glance, "this one shoots and it hurts".
-        const p = 1 + Math.sin(time * 3 + e.spin2) * 0.05;
-        R.ring(e.x, e.y, e.radius * 1.34 * p, 1.4, 1.5, 1.05, 0.28, 0.5 * alpha);
-        R.glow(e.x, e.y, e.radius * 2.2, 1.4, 1.0, 0.3, 0.10 * alpha, 2.1);
+        // Gold marker bars flanking the hull — reads as insignia, not as UI.
+        const ef = e.face || 0;
+        const c = Math.cos(ef), sn = Math.sin(ef);
+        for (const side of [-1, 1]) {
+          const lx = side * e.radius * 0.92, ly = -e.radius * 0.18;
+          R.slabLit(e.x + lx * c - ly * sn, e.y + lx * sn + ly * c,
+            e.radius * 0.07, e.radius * 0.26, ef, 1.6, 1.15, 0.30, 0.95 * alpha, 0);
+        }
       }
       if (e.stun > 0) {
-        R.ring(e.x, e.y, e.radius + 7 + Math.sin(time * 20) * 2, 1.6, 0.5, 0.9, 1.9, 0.8);
-      }
-      if (e.shield > 0) {
-        const f = e.shield / e.maxShield;
-        R.ring(e.x, e.y, e.radius * 1.5, 1.4, 0.4, 0.8, 1.6, 0.4 + f * 0.4);
+        // Arcing across the airframe rather than orbiting it.
+        for (let i = 0; i < 3; i++) {
+          const a = time * 9 + i * 2.1;
+          R.spark(e.x + Math.cos(a) * e.radius * 0.7, e.y + Math.sin(a) * e.radius * 0.7,
+            e.radius * 0.5, 1.6, a, 0.5, 0.9, 1.9, 0.85);
+        }
       }
       if (e.boss) {
-        R.ring(e.x, e.y, e.radius * 1.7 + Math.sin(time * 4) * 2, 2.2, 1.6, 0.25, 0.35, 0.85);
-        R.ring(e.x, e.y, e.radius * 2.0, 3.0, 1.5, 0.4, 0.2, 0.25);
-        R.ring(e.x, e.y, e.radius * 2.0, 3.0 * hpFrac, 1.6, 0.5, 0.2, 0.9);
+        // The boss keeps a readout, but as a bar above it rather than a halo.
+        const w = e.radius * 1.5;
+        R.slabLit(e.x, e.y - e.radius * 1.5, w, 1.8, 0, 0.35, 0.10, 0.12, 0.75, 0);
+        R.slabLit(e.x - w * (1 - hpFrac), e.y - e.radius * 1.5, w * hpFrac, 1.8, 0,
+          1.7, 0.45, 0.25, 1, 0);
       }
       e.x = trueX; e.y = trueY;
     }

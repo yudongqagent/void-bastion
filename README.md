@@ -573,6 +573,45 @@ grey — a notch in a wing survives, a panel line does not. And mirroring a wing
 reverses its polygon winding, which a fixed-sign inside test silently rejects;
 that shipped one bake with a full wing on the left and nothing on the right.
 
+### Paint schemes, and where colour comes from
+
+Each class carries a baked scheme: a dark upper surface grading to lighter
+outboard skin, a dielectric radome at the nose, heat-stained bare metal at the
+exhaust, spine and tail trim, and a squadron roundel on each wing. The material
+supplies DETAIL — panel lines, grain, wear — as a luminance modulation, and the
+paint supplies colour; where a material is genuinely chromatic (rust, thermal
+foil, hazard stripes) it keeps its own.
+
+The craft used to be one flat tone each, and the cause was not over-saturated
+hull tints. It was that `e.color` was set from `COLORS.*`, the **display**
+palette, whose values sit above 1.0 specifically so they bloom. Multiplying a
+hot pink over an entire airframe leaves a single saturated block no matter what
+is baked underneath. Bodies are now tinted by `hullFor()`'s muted hull, and the
+neon palette is reserved for what it was for: lamps, exhaust and weapon fire.
+
+### Structures
+
+Islands, bases, convoys and reefs carry baked structures — hangars, control
+towers, radar, fuel silos, cranes, container stacks, bunkers, groves and rock
+outcrops — authored in the same airframe vocabulary and baked into the same
+atlas. A hangar on an island is therefore lit, occluded and shadowed exactly the
+way an aircraft is, by construction rather than by matching two pipelines up.
+
+Placement is generated with the feature from the terrain's own PRNG, so a
+coastline and everything standing on it stay stable as they scroll.
+
+### No halos
+
+Craft carry no rings. Persistent circles around every airframe read as interface
+furniture and flatten the silhouette work underneath them. Status is shown on
+the craft instead: warden cover is a cold sheen, elite is a pair of gold marker
+bars, stun arcs across the hull, and a boss gets a health bar above it.
+
+Shields are the clearest case. A shield that is always visible is a ring; a
+shield that appears **where it was struck** is an event. Absorbing a hit now
+lights three short arc facets on the impact bearing and fades in under a third
+of a second.
+
 ### Baked craft, and why texture alone was not enough
 
 Materials gave surfaces grain and a real tangent normal, and craft still read as

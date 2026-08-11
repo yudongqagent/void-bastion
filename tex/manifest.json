@@ -1,9 +1,9 @@
 {
   "material": "material.58987dd2.png",
   "surface": "surface.73c1a18a.png",
-  "craft_albedo": "craft_albedo.868c1c37.png",
-  "craft_surface": "craft_surface.fac5c0c6.png",
-  "craftGrid": 5,
+  "craft_albedo": "craft_albedo.b4a807c7.png",
+  "craft_surface": "craft_surface.47210f55.png",
+  "craftGrid": 6,
   "craftOrder": [
     "ship",
     "drone",
@@ -26,6 +26,15 @@
     "turret",
     "tank",
     "warship",
-    "sam"
+    "sam",
+    "hangar",
+    "tower",
+    "radar",
+    "silo",
+    "crane",
+    "containers",
+    "bunker",
+    "grove",
+    "outcrop"
   ]
 }
