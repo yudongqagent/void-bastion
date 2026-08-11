@@ -220,102 +220,134 @@ function evalPart(part, x, y) {
   }
 }
 
-/**
- * Paint schemes.
- *
- * The craft were one flat tone each, and the cause was not over-saturated hull
- * tints — those are already muted (0.26-0.42) — but that nothing varied HUE
- * across an airframe. The old livery multiplied brightness only, so a craft was
- * one colour at several exposures.
- *
- * Each class now gets a real scheme: an upper surface, lighter outboard panels,
- * a dark dielectric radome at the nose, bare-metal leading edges, and coloured
- * trim. The material still supplies the detail — panel lines, grain, wear — but
- * as a LUMINANCE modulation rather than as the colour itself.
- */
+// Per-class liveries.
+//
+// Two wrong turns got us here, both worth recording.
+//
+// First pass: muted two-tone military grey. Every airframe came out the same
+// mid-value neutral and the fleet read as one grey mass.
+//
+// Second pass: saturated primaries — red, orange, teal, violet. Distinct, and
+// completely wrong for the reference. Sky Force Reloaded's aircraft are NOT
+// saturated. They are gunmetal, olive drab, sand, ghost grey and dark navy,
+// and the only saturated colour on them lives in a few square pixels: a red
+// nose tip, yellow-black chevrons at an intake, a decal, the nozzle glow.
+//
+// What actually makes them look rich is VALUE RANGE, not hue. A single craft
+// runs from near-white on the sunlit upper surfaces to near-black in the panel
+// recesses and shadowed undersides. The first pass failed because every craft
+// sat in a narrow mid-grey band, so it averaged to mush — not because it lacked
+// colour.
+//
+// So: classes are separated by TONE FAMILY (how light, how warm) and by
+// silhouette, which is already doing the heavy lifting. Each carries a wide
+// internal value spread and a few small saturated marks.
+//
+//   base  the dominant tone, desaturated
+//   deck  sunlit upper surfaces, markedly lighter than base
+//   shade shadowed and recessed areas, markedly darker
+//   mark  the ONE saturated accent, used only on small features
 const SCHEMES = {
-  ship:       { top: [0.46, 0.52, 0.60], low: [0.74, 0.78, 0.84], trim: [1.25, 0.62, 0.22] },
-  drone:      { top: [0.40, 0.43, 0.46], low: [0.64, 0.66, 0.68], trim: [1.10, 0.72, 0.22] },
-  darter:     { top: [0.50, 0.44, 0.34], low: [0.78, 0.72, 0.58], trim: [1.15, 0.50, 0.20] },
-  mite:       { top: [0.44, 0.46, 0.48], low: [0.66, 0.68, 0.70], trim: [1.05, 0.68, 0.24] },
-  wraith:     { top: [0.20, 0.21, 0.26], low: [0.34, 0.36, 0.44], trim: [0.60, 0.55, 1.10] },
-  lancer:     { top: [0.38, 0.42, 0.50], low: [0.62, 0.68, 0.76], trim: [1.20, 0.55, 0.30] },
-  sniper:     { top: [0.36, 0.40, 0.44], low: [0.60, 0.64, 0.70], trim: [1.15, 0.60, 0.25] },
-  splitter:   { top: [0.36, 0.46, 0.38], low: [0.60, 0.72, 0.62], trim: [0.55, 1.20, 0.55] },
-  sentinel:   { top: [0.48, 0.44, 0.34], low: [0.76, 0.70, 0.56], trim: [1.20, 0.80, 0.25] },
-  brute:      { top: [0.38, 0.38, 0.46], low: [0.62, 0.62, 0.72], trim: [0.85, 0.50, 1.20] },
-  gunship:    { top: [0.36, 0.40, 0.30], low: [0.58, 0.62, 0.46], trim: [1.10, 0.85, 0.30] },
-  bomber:     { top: [0.42, 0.40, 0.30], low: [0.66, 0.62, 0.46], trim: [1.30, 0.85, 0.20] },
-  radial:     { top: [0.32, 0.34, 0.40], low: [0.54, 0.56, 0.66], trim: [1.20, 0.40, 0.35] },
-  shielder:   { top: [0.40, 0.46, 0.58], low: [0.66, 0.74, 0.88], trim: [0.45, 0.90, 1.30] },
-  warden:     { top: [0.52, 0.46, 0.28], low: [0.82, 0.74, 0.44], trim: [0.40, 1.20, 1.00] },
-  dread:      { top: [0.34, 0.36, 0.42], low: [0.56, 0.60, 0.68], trim: [1.25, 0.45, 0.30] },
-  juggernaut: { top: [0.36, 0.36, 0.40], low: [0.60, 0.60, 0.66], trim: [0.90, 0.50, 1.20] },
-  boss:       { top: [0.34, 0.32, 0.32], low: [0.58, 0.55, 0.52], trim: [1.35, 0.70, 0.15] },
-  turret:     { top: [0.42, 0.43, 0.40], low: [0.62, 0.63, 0.58], trim: [1.10, 0.70, 0.25] },
-  sam:        { top: [0.40, 0.42, 0.38], low: [0.60, 0.62, 0.56], trim: [1.15, 0.55, 0.25] },
-  tank:       { top: [0.34, 0.38, 0.30], low: [0.54, 0.60, 0.46], trim: [1.05, 0.75, 0.28] },
-  warship:    { top: [0.40, 0.40, 0.42], low: [0.62, 0.62, 0.64], trim: [1.10, 0.60, 0.25] },
+  // The player: ghost grey, the lightest airframe in the game so it never gets
+  // lost among enemies, with a warm marker.
+  ship:       { base: [0.62, 0.65, 0.70], deck: [0.95, 0.98, 1.02], shade: [0.16, 0.18, 0.22], mark: [1.20, 0.52, 0.18] },
 
-  hangar:     { top: [0.46, 0.48, 0.50], low: [0.66, 0.68, 0.70], trim: [1.10, 0.72, 0.22] },
-  tower:      { top: [0.56, 0.57, 0.56], low: [0.74, 0.75, 0.74], trim: [1.20, 0.35, 0.25] },
-  radar:      { top: [0.60, 0.62, 0.64], low: [0.80, 0.82, 0.84], trim: [1.10, 0.60, 0.25] },
-  silo:       { top: [0.62, 0.63, 0.62], low: [0.82, 0.83, 0.82], trim: [1.15, 0.55, 0.20] },
-  crane:      { top: [0.70, 0.58, 0.20], low: [0.90, 0.76, 0.28], trim: [0.30, 0.30, 0.32] },
-  containers: { top: [0.42, 0.50, 0.56], low: [0.66, 0.74, 0.80], trim: [1.05, 0.60, 0.28] },
-  bunker:     { top: [0.44, 0.46, 0.42], low: [0.62, 0.64, 0.58], trim: [0.95, 0.65, 0.28] },
-  grove:      { top: [0.20, 0.34, 0.18], low: [0.34, 0.52, 0.26], trim: [0.26, 0.40, 0.20] },
-  outcrop:    { top: [0.42, 0.40, 0.36], low: [0.62, 0.59, 0.53], trim: [0.50, 0.47, 0.43] },
+  drone:      { base: [0.44, 0.45, 0.47], deck: [0.74, 0.75, 0.77], shade: [0.12, 0.13, 0.15], mark: [1.15, 0.28, 0.22] },
+  darter:     { base: [0.52, 0.49, 0.42], deck: [0.86, 0.82, 0.70], shade: [0.14, 0.13, 0.11], mark: [1.20, 0.60, 0.16] },
+  mite:       { base: [0.50, 0.51, 0.52], deck: [0.80, 0.81, 0.82], shade: [0.14, 0.15, 0.16], mark: [1.10, 0.75, 0.18] },
+  wraith:     { base: [0.17, 0.18, 0.22], deck: [0.36, 0.38, 0.46], shade: [0.06, 0.06, 0.09], mark: [0.65, 0.30, 1.00] },
+  lancer:     { base: [0.34, 0.38, 0.45], deck: [0.66, 0.72, 0.82], shade: [0.10, 0.12, 0.16], mark: [1.15, 0.45, 0.18] },
+  sniper:     { base: [0.46, 0.48, 0.49], deck: [0.80, 0.83, 0.85], shade: [0.12, 0.13, 0.14], mark: [1.10, 0.35, 0.20] },
+  splitter:   { base: [0.34, 0.40, 0.34], deck: [0.62, 0.70, 0.60], shade: [0.10, 0.13, 0.10], mark: [0.55, 1.05, 0.40] },
+  sentinel:   { base: [0.48, 0.44, 0.36], deck: [0.82, 0.76, 0.62], shade: [0.13, 0.12, 0.10], mark: [1.20, 0.55, 0.15] },
+  brute:      { base: [0.36, 0.35, 0.40], deck: [0.66, 0.65, 0.74], shade: [0.11, 0.11, 0.14], mark: [0.85, 0.35, 1.10] },
+  gunship:    { base: [0.36, 0.40, 0.30], deck: [0.62, 0.66, 0.50], shade: [0.11, 0.13, 0.09], mark: [1.15, 0.70, 0.18] },
+  bomber:     { base: [0.42, 0.41, 0.36], deck: [0.72, 0.70, 0.60], shade: [0.12, 0.12, 0.10], mark: [1.25, 0.85, 0.15] },
+  radial:     { base: [0.38, 0.37, 0.40], deck: [0.68, 0.66, 0.72], shade: [0.11, 0.11, 0.13], mark: [1.20, 0.30, 0.35] },
+  shielder:   { base: [0.42, 0.47, 0.54], deck: [0.76, 0.84, 0.94], shade: [0.12, 0.15, 0.19], mark: [0.35, 0.95, 1.25] },
+  warden:     { base: [0.50, 0.47, 0.36], deck: [0.86, 0.80, 0.60], shade: [0.14, 0.13, 0.10], mark: [0.35, 1.10, 0.95] },
+  dread:      { base: [0.32, 0.32, 0.35], deck: [0.60, 0.60, 0.66], shade: [0.09, 0.09, 0.11], mark: [1.25, 0.30, 0.20] },
+  juggernaut: { base: [0.35, 0.34, 0.37], deck: [0.64, 0.63, 0.68], shade: [0.10, 0.10, 0.12], mark: [0.90, 0.40, 1.10] },
+  boss:       { base: [0.30, 0.29, 0.30], deck: [0.58, 0.56, 0.56], shade: [0.08, 0.08, 0.09], mark: [1.30, 0.55, 0.12] },
+
+  turret:     { base: [0.40, 0.43, 0.33], deck: [0.66, 0.70, 0.55], shade: [0.13, 0.15, 0.11], mark: [1.10, 0.50, 0.18] },
+  sam:        { base: [0.39, 0.42, 0.34], deck: [0.64, 0.68, 0.54], shade: [0.12, 0.14, 0.11], mark: [1.15, 0.45, 0.18] },
+  tank:       { base: [0.36, 0.41, 0.29], deck: [0.60, 0.66, 0.47], shade: [0.11, 0.13, 0.09], mark: [1.05, 0.60, 0.20] },
+  warship:    { base: [0.38, 0.40, 0.43], deck: [0.64, 0.67, 0.71], shade: [0.11, 0.12, 0.14], mark: [1.10, 0.45, 0.18] },
+
+  hangar:     { base: [0.42, 0.44, 0.47], deck: [0.70, 0.73, 0.76], shade: [0.13, 0.14, 0.16], mark: [1.10, 0.62, 0.20] },
+  tower:      { base: [0.56, 0.56, 0.55], deck: [0.86, 0.86, 0.84], shade: [0.16, 0.16, 0.16], mark: [1.15, 0.28, 0.20] },
+  radar:      { base: [0.56, 0.58, 0.60], deck: [0.86, 0.88, 0.90], shade: [0.16, 0.17, 0.18], mark: [1.10, 0.50, 0.22] },
+  silo:       { base: [0.60, 0.60, 0.58], deck: [0.90, 0.90, 0.87], shade: [0.17, 0.17, 0.16], mark: [1.15, 0.48, 0.18] },
+  crane:      { base: [0.62, 0.55, 0.30], deck: [0.92, 0.82, 0.42], shade: [0.15, 0.14, 0.11], mark: [1.20, 0.75, 0.15] },
+  containers: { base: [0.40, 0.44, 0.48], deck: [0.68, 0.72, 0.76], shade: [0.12, 0.13, 0.15], mark: [0.85, 0.42, 0.24] },
+  bunker:     { base: [0.42, 0.44, 0.39], deck: [0.68, 0.70, 0.62], shade: [0.13, 0.14, 0.12], mark: [0.95, 0.55, 0.22] },
+  grove:      { base: [0.19, 0.34, 0.17], deck: [0.36, 0.58, 0.28], shade: [0.06, 0.12, 0.06], mark: [0.28, 0.46, 0.20] },
+  outcrop:    { base: [0.40, 0.38, 0.35], deck: [0.68, 0.65, 0.59], shade: [0.13, 0.12, 0.11], mark: [0.50, 0.47, 0.43] },
+  pier:       { base: [0.38, 0.33, 0.28], deck: [0.62, 0.55, 0.45], shade: [0.11, 0.10, 0.08], mark: [0.90, 0.60, 0.25] },
+  depot:      { base: [0.48, 0.47, 0.43], deck: [0.78, 0.76, 0.68], shade: [0.14, 0.14, 0.13], mark: [1.10, 0.52, 0.18] },
+  mast:       { base: [0.58, 0.58, 0.60], deck: [0.88, 0.88, 0.90], shade: [0.16, 0.16, 0.17], mark: [1.15, 0.32, 0.22] },
 };
+
 const DEFAULT_SCHEME = SCHEMES.drone;
 
 /** Paint colour at a point, before the material's detail is applied. */
 const STRUCTURE_SET = new Set(['hangar', 'tower', 'radar', 'silo', 'crane',
-  'containers', 'bunker', 'grove', 'outcrop']);
+  'containers', 'bunker', 'grove', 'outcrop', 'pier', 'depot', 'mast']);
 
 function paintAt(x, y, type) {
   const sc = SCHEMES[type] || DEFAULT_SCHEME;
   const ax = Math.abs(x);
+  const lerp3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t];
+
   if (STRUCTURE_SET.has(type)) {
-    // Buildings get the two-tone and nothing else — no radome, no spine stripe,
-    // and emphatically no squadron roundel on a fuel tank.
-    const t = clamp01((ax - 0.08) / 0.46);
-    return [sc.top[0] + (sc.low[0] - sc.top[0]) * t,
-      sc.top[1] + (sc.low[1] - sc.top[1]) * t,
-      sc.top[2] + (sc.low[2] - sc.top[2]) * t];
+    return lerp3(sc.shade, sc.deck, clamp01((ax - 0.05) / 0.42));
   }
 
-  // Upper surfaces dark, outboard skin light — the standard two-tone that makes
-  // an airframe read as having a top and a side.
-  const t = clamp01((ax - 0.10) / 0.42);
-  let r = sc.top[0] + (sc.low[0] - sc.top[0]) * t;
-  let g = sc.top[1] + (sc.low[1] - sc.top[1]) * t;
-  let b = sc.top[2] + (sc.low[2] - sc.top[2]) * t;
+  // The core of the look: a wide value ramp across the craft. Upper surfaces
+  // near the centreline catch the light and go bright; outboard and aft falls
+  // away into shadow. This spread — not hue — is what separates a rich airframe
+  // from a flat one.
+  const lit = clamp01(1 - Math.abs(ax - 0.20) / 0.80) * clamp01((y + 1.25) / 1.75);
+  let c = lerp3(sc.base, sc.deck, Math.pow(lit, 0.85));
+  // Deep shadow along the trailing edge and under the tail.
+  c = lerp3(c, sc.shade, clamp01((-y - 0.52) / 0.60) * 0.55);
 
-  // Dark dielectric radome over the nose.
-  if (y > 0.74) {
-    const k = clamp01((y - 0.74) / 0.30);
-    r = r * (1 - k) + 0.20 * k; g = g * (1 - k) + 0.21 * k; b = b * (1 - k) + 0.24 * k;
-  }
-  // Bare metal around the exhaust, heat-stained.
-  if (y < -0.56) {
-    const k = clamp01((-0.56 - y) / 0.36);
-    r = r * (1 - k) + 0.52 * k; g = g * (1 - k) + 0.50 * k; b = b * (1 - k) + 0.50 * k;
-  }
-  // Trim stripe along the spine, and a band across the tail.
-  if (ax < 0.045) { r = sc.trim[0] * 0.55; g = sc.trim[1] * 0.55; b = sc.trim[2] * 0.55; }
-  if (y > -0.50 && y < -0.42) { r = sc.trim[0] * 0.7; g = sc.trim[1] * 0.7; b = sc.trim[2] * 0.7; }
-  // Wing walkway.
-  if (ax > 0.24 && ax < 0.31) { r *= 0.82; g *= 0.82; b *= 0.82; }
+  const put = (col, k = 1) => { c = [col[0] * k, col[1] * k, col[2] * k]; };
 
-  // Squadron roundel on each wing — the single most "built by someone" detail.
-  const rr = Math.hypot(ax - 0.52, y - 0.02);
-  if (rr < 0.095) {
-    if (rr < 0.040) { r = 1.25; g = 0.35; b = 0.28; }
-    else if (rr < 0.066) { r = 0.92; g = 0.92; b = 0.94; }
-    else { r = 0.30; g = 0.36; b = 0.72; }
+  // Near-black recesses where structures meet. Small, hard-edged, high contrast.
+  if (ax > 0.30 && ax < 0.345) put(sc.shade, 1.1);
+  if (y > 0.30 && y < 0.335 && ax < 0.30) put(sc.shade, 1.1);
+
+  // Dark dielectric radome.
+  if (y > 0.76) put(sc.shade, 1.5);
+  // Red nose tip: a few square pixels of the only saturated colour up front.
+  if (y > 0.96) put(sc.mark, 0.9);
+
+  // Bare-metal leading edge — bright, and the piece that catches specular.
+  if (ax > 0.36 && y > 0.14 && y < 0.20) put(sc.deck, 1.22);
+
+  // Warning chevrons at the intakes: small, black-and-yellow, high contrast.
+  if (y < -0.30 && y > -0.46 && ax > 0.16 && ax < 0.34) {
+    const band = ((x * 26 + y * 26) % 2 + 2) % 2;
+    put(band < 1 ? [1.05, 0.80, 0.15] : [0.10, 0.10, 0.11], 1);
   }
-  return [r, g, b];
+  // Heat-stained metal at the nozzles.
+  if (y < -0.62) put([0.34, 0.32, 0.32], 1);
+
+  // White stencil band on the tail, with the class marker beneath it.
+  if (y < -0.50 && y > -0.58 && ax < 0.22) put([0.92, 0.92, 0.90], 1);
+  if (y < -0.585 && y > -0.62 && ax < 0.16) put(sc.mark, 0.85);
+
+  // Squadron roundel: white ring, dark centre. Reads as a marking at any size.
+  const rr = Math.hypot(ax - 0.58, y - 0.02);
+  if (rr < 0.075) {
+    if (rr < 0.030) put(sc.mark, 0.85);
+    else if (rr < 0.050) put([0.90, 0.90, 0.88], 1);
+    else put(sc.shade, 1.2);
+  }
+  return c;
 }
 
 // --- bake one craft ------------------------------------------------------------

@@ -45,14 +45,28 @@ function makeIsland(rng, x, w) {
   // nothing floats off the coast.
   const props = [];
   for (const l of lobes) {
-    const n = rng() < 0.55 ? 2 : 1;
+    const n = 2 + ((rng() * 3) | 0);
     for (let i = 0; i < n; i++) {
-      const a = rng() * Math.PI * 2, d = l.r * 0.5 * rng();
+      const a = rng() * Math.PI * 2, d = l.r * 0.55 * rng();
       props.push({
-        type: rng() < 0.62 ? 'grove' : 'outcrop',
+        type: rng() < 0.60 ? 'grove' : 'outcrop',
         dx: l.dx + Math.cos(a) * d, dy: l.dy + Math.sin(a) * d,
-        r: l.r * (0.18 + rng() * 0.16), rot: rng() * Math.PI * 2,
+        r: Math.min(l.r * 0.26, 11 + rng() * 9), rot: rng() * Math.PI * 2,
       });
+    }
+    // Signs of habitation: a jetty reaching into the water, a mast on a peak.
+    if (rng() < 0.4) {
+      const a = rng() * Math.PI * 2;
+      props.push({ type: 'pier', dx: l.dx + Math.cos(a) * l.r * 0.95,
+        dy: l.dy + Math.sin(a) * l.r * 0.95, r: Math.min(l.r * 0.32, 26), rot: a - Math.PI / 2 });
+    }
+    if (rng() < 0.28) {
+      props.push({ type: 'mast', dx: l.dx + (rng() - 0.5) * l.r * 0.6,
+        dy: l.dy + (rng() - 0.5) * l.r * 0.6, r: Math.min(l.r * 0.22, 20), rot: 0 });
+    }
+    if (rng() < 0.22) {
+      props.push({ type: 'depot', dx: l.dx + (rng() - 0.5) * l.r * 0.7,
+        dy: l.dy + (rng() - 0.5) * l.r * 0.7, r: Math.min(l.r * 0.26, 24), rot: rng() * 0.6 - 0.3 });
     }
   }
   return { kind: 'island', x, w, lobes, props };
@@ -61,14 +75,25 @@ function makeIsland(rng, x, w) {
 /** Airfield furniture: what a base is actually made of. */
 function baseProps(rng, w) {
   const out = [];
-  const put = (type, dx, dy, r, rot = 0) => out.push({ type, dx, dy, r: w * r, rot });
+  // Clamped: structures are real objects at a real size, not a fraction of
+  // whatever slab they happen to stand on.
+  const put = (type, dx, dy, r, rot = 0) =>
+    out.push({ type, dx, dy, r: Math.min(w * r, 34), rot });
+  // A base should read as a working airfield: control, shelter, storage,
+  // sensors and clutter, not one shed on a slab.
   put('tower', (rng() - 0.5) * w * 0.5, w * 0.30, 0.13);
   put('hangar', -w * (0.20 + rng() * 0.12), -w * 0.10, 0.17, rng() * 0.3 - 0.15);
-  if (rng() < 0.75) put('hangar', w * (0.22 + rng() * 0.10), -w * 0.22, 0.15, rng() * 0.3 - 0.15);
-  if (rng() < 0.7) put('radar', w * (rng() - 0.5) * 0.5, -w * 0.34, 0.10);
-  if (rng() < 0.65) put('silo', -w * (0.26 + rng() * 0.1), w * 0.22, 0.12);
-  if (rng() < 0.6) put('containers', w * (0.24 + rng() * 0.1), w * 0.16, 0.11);
-  if (rng() < 0.5) put('bunker', w * (rng() - 0.5) * 0.6, -w * 0.40, 0.10);
+  if (rng() < 0.8) put('hangar', w * (0.22 + rng() * 0.10), -w * 0.22, 0.15, rng() * 0.3 - 0.15);
+  if (rng() < 0.55) put('hangar', -w * (0.30 + rng() * 0.10), w * 0.34, 0.13, rng() * 0.4 - 0.2);
+  if (rng() < 0.75) put('radar', w * (rng() - 0.5) * 0.5, -w * 0.34, 0.10);
+  if (rng() < 0.7) put('silo', -w * (0.26 + rng() * 0.1), w * 0.22, 0.12);
+  if (rng() < 0.7) put('containers', w * (0.24 + rng() * 0.1), w * 0.16, 0.11);
+  if (rng() < 0.6) put('bunker', w * (rng() - 0.5) * 0.6, -w * 0.40, 0.10);
+  if (rng() < 0.65) put('depot', w * (0.28 + rng() * 0.12), -w * 0.02, 0.13);
+  if (rng() < 0.6) put('mast', w * (rng() - 0.5) * 0.7, w * 0.42, 0.11);
+  if (rng() < 0.5) put('containers', -w * (0.34 + rng() * 0.08), -w * 0.30, 0.09,
+    rng() * 0.6 - 0.3);
+  if (rng() < 0.45) put('grove', w * (rng() - 0.5) * 0.9, -w * 0.46, 0.10);
   return out;
 }
 
@@ -309,7 +334,10 @@ export class Terrain {
           const px = f.x + pr.dx, py = f.y + pr.dy;
           const size = pr.r * 1.35;
           R.craftShadow(px + pr.r * 0.28, py + pr.r * 0.22, size, pr.rot, layer, 0.34);
-          R.craft(px, py, size, pr.rot, layer, 1, 1, 1, 1, [1.1, 0.95, 0.7]);
+          // 0.4 is the tint that comes out NEUTRAL through the shader's
+          // mix(1, tint * 2.5, 0.55). Passing 1,1,1 reads as 1.83x and turned
+          // every building and tree into a white blob.
+          R.craft(px, py, size, pr.rot, layer, 0.40, 0.40, 0.40, 1, [0.44, 0.40, 0.30]);
         }
       }
     }

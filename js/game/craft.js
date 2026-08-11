@@ -100,6 +100,9 @@ export const CRAFT_MATERIAL = {
   bunker:     [11, 30],  // concrete
   grove:      [12, 34],  // rock, tinted green at draw time
   outcrop:    [12, 40],  // rock
+  pier:       [0, 22],   // painted plate over piles
+  depot:      [11, 26],  // concrete
+  mast:       [1, 18],   // brushed steel lattice
 };
 
 /** Materials used by things that are not craft. */

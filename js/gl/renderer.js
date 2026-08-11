@@ -176,7 +176,7 @@ vec4 craftSprite(vec3 tint, vec3 accent) {
   float rough = max(srf.b, 0.05);
   float diff = 0.72 + 0.74 * max(dot(N, L), 0.0);
   vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
-  float spec = pow(max(dot(N, H), 0.0), mix(80.0, 6.0, rough)) * (1.0 - rough) * 1.1;
+  float spec = pow(max(dot(N, H), 0.0), mix(140.0, 8.0, rough)) * (1.0 - rough) * 1.9;
 
   // Rim / fill light. Surfaces turning away from the camera catch a cool sky
   // bounce, which outlines every curved form — a fuselage tube, a canopy, a
@@ -189,9 +189,14 @@ vec4 craftSprite(vec3 tint, vec3 accent) {
   // reduced every craft to one flat tone; the baked paint scheme has to survive
   // it. Archetype colour still shifts the craft, it no longer replaces it.
   vec3 hue = mix(vec3(1.0), tint * 2.5, 0.55);
+  // Rim is scaled by the surface's own brightness. A flat additive rim swamps
+  // dark objects — small domes are almost entirely edge, so tree canopies and
+  // rock came out as pale blue blobs regardless of the green and grey baked
+  // into them. A dark surface should catch a dark rim.
+  float albLum = dot(alb.rgb, vec3(0.2126, 0.7152, 0.0722));
   vec3 rgb = hue * alb.rgb * 2.05 * diff
     + spec * mix(vec3(1.0), hue, 0.45)
-    + rim * vec3(0.30, 0.40, 0.54) * 0.95;
+    + rim * vec3(0.30, 0.40, 0.54) * 0.95 * mix(0.18, 1.0, clamp(albLum * 2.0, 0.0, 1.0));
   // Running lights: added, not substituted, and only where the mask is strong.
   // Replacing the hull across the whole dot at accent*2.2 blew each craft out
   // into a single glowing ellipse once bloom got hold of it.

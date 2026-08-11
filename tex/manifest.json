@@ -1,8 +1,8 @@
 {
   "material": "material.58987dd2.png",
   "surface": "surface.73c1a18a.png",
-  "craft_albedo": "craft_albedo.b4a807c7.png",
-  "craft_surface": "craft_surface.47210f55.png",
+  "craft_albedo": "craft_albedo.9c36533a.png",
+  "craft_surface": "craft_surface.e968ecf1.png",
   "craftGrid": 6,
   "craftOrder": [
     "ship",
@@ -35,6 +35,9 @@
     "containers",
     "bunker",
     "grove",
-    "outcrop"
+    "outcrop",
+    "pier",
+    "depot",
+    "mast"
   ]
 }

@@ -479,9 +479,43 @@ const outcrop = [
   dome({ p: [-0.12, 0.44], r: 0.22, h: 0.38, m: 0.86 }),
 ];
 
+const pier = [
+  plate({ p: [0, 0.10], hw: 0.14, hh: 0.72, h: 0.20, m: 0.9 }),
+  plate({ p: [0, -0.58], hw: 0.42, hh: 0.16, h: 0.22, m: 0.95 }),
+  // Piles under the deck, which is what makes it read as a jetty and not a bar.
+  ...[0.5, 0.15, -0.2, -0.5].flatMap((y) => [
+    barrel({ p: [0.11, y], len: 0.10, r: 0.030, h: 0.12, m: 0.8, mirror: true }),
+  ]),
+  plate({ p: [0.26, 0.34], hw: 0.10, hh: 0.10, h: 0.34, m: 1.0 }),
+  lamp([0, 0.78], 0.035, 2.2),
+  lamp([0.26, 0.42], 0.03, 1.8),
+];
+
+const depot = [
+  plate({ p: [0, 0], hw: 0.62, hh: 0.46, h: 0.14, m: 0.85 }),
+  plate({ p: [-0.26, 0.18], hw: 0.26, hh: 0.20, h: 0.40, m: 1.0 }),
+  plate({ p: [0.28, 0.20], hw: 0.22, hh: 0.16, h: 0.34, m: 0.95 }),
+  dome({ p: [-0.02, -0.24], r: 0.20, h: 0.46, m: 1.0 }),
+  barrel({ p: [-0.26, 0.36], len: 0.20, r: 0.024, h: 0.48 }),
+  plate({ p: [0.34, -0.26], hw: 0.18, hh: 0.10, h: 0.26, m: 0.9 }),
+  lamp([-0.26, 0.32], 0.032, 2.2),
+  lamp([0.28, 0.30], 0.03, 2.0),
+];
+
+const mast = [
+  plate({ p: [0, -0.62], hw: 0.24, hh: 0.14, h: 0.18, m: 0.85 }),
+  plate({ p: [0, -0.06], hw: 0.055, hh: 0.60, h: 0.72, m: 1.0 }),
+  plate({ p: [0, 0.10], hw: 0.30, hh: 0.035, h: 0.62, m: 0.9 }),
+  plate({ p: [0, 0.36], hw: 0.22, hh: 0.030, h: 0.68, m: 0.9 }),
+  dome({ p: [0, 0.58], r: 0.09, h: 0.78, m: 1.05 }),
+  lamp([0, 0.62], 0.045, 3.0),
+  lamp([0.30, 0.10], 0.028, 1.8),
+  lamp([-0.30, 0.10], 0.028, 1.8),
+];
+
 export const STRUCTURES = {
   hangar, tower: controlTower, radar, silo, crane, containers, bunker,
-  grove, outcrop,
+  grove, outcrop, pier, depot, mast,
 };
 
 /** Structures share the airframe pipeline: same expansion, same bake, same atlas. */

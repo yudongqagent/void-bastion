@@ -143,6 +143,7 @@ const newEnemy = () => ({
 
 const newBullet = () => ({
   active: false, x: 0, y: 0, vx: 0, vy: 0, dmg: 0, pierce: 1, life: 0,
+  boost: 0, smokeT: 0,
   crit: false, radius: 3, hits: null, fromEnemy: false,
   homing: 0, drag: 0, minSpeed: 0, missile: false, system: null, split: 0,
 });
@@ -1282,7 +1283,13 @@ export class Game {
    */
   spawnWreckage(e) {
     if (e.radius < 9 || e.ground) return;
-    const bodies = craftBodies(e.type);
+    // Only the largest few parts become debris. The airframes carry 15-25
+    // structural parts now, and shedding all of them buried the screen in
+    // confetti — 44 pieces from a single kill. Six reads as a craft coming
+    // apart; forty reads as a particle system.
+    const all = craftBodies(e.type);
+    const bodies = all.length <= 6 ? all
+      : [...all].sort((a, b) => (b.hw * b.hh) - (a.hw * a.hh)).slice(0, 6);
     const f = e.face || 0;
     const cos = Math.cos(f), sin = Math.sin(f);
     const sc = e.radius;
@@ -1307,9 +1314,11 @@ export class Game {
       w.angle = f + bd.rot;
       w.rot = bd.rot;
       w.shape = bd.shape;
-      w.hw = (bd.hw || 0) * sc;
-      w.hh = (bd.hh || 0) * sc;
-      w.r0 = (bd.r || 0) * sc;
+      // Slightly under size: debris should read as fragments, not as the
+      // craft's parts flying off intact.
+      w.hw = (bd.hw || 0) * sc * 0.72;
+      w.hh = (bd.hh || 0) * sc * 0.72;
+      w.r0 = (bd.r || 0) * sc * 0.72;
       w.sides = bd.sides || 4;
 
       w.alt = 1;
@@ -1606,12 +1615,29 @@ export class Game {
           b.vx += ((hx / hd) * sp - b.vx) * k;
           b.vy += ((hy / hd) * sp - b.vy) * k;
         }
-        // Dense exhaust: the trail is what makes a missile read as a missile.
-        if (Math.random() < dt * 90) {
-          this.spawnParticle(b.x - b.vx * 0.02, b.y - b.vy * 0.02,
-            -b.vx * 0.12 + (Math.random() - 0.5) * 40,
-            -b.vy * 0.12 + (Math.random() - 0.5) * 40,
-            0.42, 4.4, COLORS.missile, 0.92, 1);
+        // Boost: accelerate hard out of the launch arc up to a cruise speed.
+        // Without this a missile holds its 170px/s launch velocity for its whole
+        // life, which reads as a drifting ball of fire rather than ordnance.
+        if (b.boost > 0) {
+          b.boost = Math.max(0, b.boost - dt);
+          const sp = Math.hypot(b.vx, b.vy) || 1;
+          const target = 640;
+          if (sp < target) {
+            const k = 1 + (1400 / sp) * dt;
+            b.vx *= k; b.vy *= k;
+          }
+        }
+        // A SMOKE trail, thin and cool, not a stream of fire. Fire belongs at
+        // the nozzle; everything behind it is spent propellant going grey.
+        b.smokeT = (b.smokeT || 0) - dt;
+        if (b.smokeT <= 0) {
+          b.smokeT = 0.012;
+          const back = 7;
+          const sp = Math.hypot(b.vx, b.vy) || 1;
+          this.spawnParticle(b.x - (b.vx / sp) * back, b.y - (b.vy / sp) * back,
+            (this.fxRandom() - 0.5) * 18, (this.fxRandom() - 0.5) * 18,
+            0.34 + this.fxRandom() * 0.22, 2.2 + this.fxRandom() * 1.6,
+            [0.46, 0.46, 0.50], 0.90, 1);
         }
       }
 
@@ -1958,6 +1984,10 @@ export class Game {
       b.homing = 2.6;
       b.drag = 0;
       b.missile = true;
+      // Boost phase: a missile that never accelerates just drifts, which is why
+      // it read as a floating fireball rather than as ordnance.
+      b.boost = 1.0;
+      b.smokeT = 0;
       b.split = s.missileTier;
       b.hits = b.hits || new Set();
       b.hits.clear();
@@ -2807,12 +2837,20 @@ export class Game {
         : b.system ? COLORS[b.system]
         : COLORS.bullet;
       if (b.missile) {
-        // A body and an exhaust flame, not a ball of light. The halo made every
-        // projectile a glowing blob and hid the shape entirely.
+        // Airframe first: a slim body, a nose and two fins. The flame is small
+        // and sits at the nozzle. Previously the flame was as large as the
+        // missile, so the whole thing read as a fireball with no shape.
         const ang = Math.atan2(b.vy, b.vx);
-        R.slabLit(b.x, b.y, 2.1, 6.0, ang + Math.PI / 2, c[0] * 0.8, c[1] * 0.8, c[2] * 0.8, 1, 0.9);
-        R.spark(b.x - Math.cos(ang) * 8, b.y - Math.sin(ang) * 8, 7, 2.4, ang,
-          1.7, 1.15, 0.45, 0.85);
+        const ca = Math.cos(ang), sa = Math.sin(ang);
+        R.slabLit(b.x, b.y, 1.7, 7.0, ang + Math.PI / 2,
+          0.80, 0.82, 0.86, 1, 0.9);
+        R.slabLit(b.x + ca * 6.2, b.y + sa * 6.2, 1.0, 2.2, ang + Math.PI / 2,
+          1.05, 0.34, 0.28, 1, 0.9);
+        // Fins at the tail, which is what gives it a readable direction.
+        R.slabLit(b.x - ca * 5.4, b.y - sa * 5.4, 3.0, 0.9, ang + Math.PI / 2,
+          0.62, 0.64, 0.68, 1, 0.9);
+        R.spark(b.x - ca * 9.5, b.y - sa * 9.5, 4.5, 1.5, ang,
+          1.65, 1.05, 0.40, 0.80);
         continue;
       }
       // One tracer silhouette for the main gun, crit or not. Crits used to be

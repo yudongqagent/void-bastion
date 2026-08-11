@@ -575,6 +575,31 @@ that shipped one bake with a full wing on the left and nothing on the right.
 
 ### Paint schemes, and where colour comes from
 
+Two wrong turns got here, both worth recording.
+
+**Muted two-tone military grey.** Every airframe came out the same mid-value
+neutral and the fleet read as one grey mass.
+
+**Saturated primaries** — red, orange, teal, violet. Distinct, and completely
+wrong for the reference. Sky Force Reloaded's aircraft are *not* saturated. They
+are gunmetal, olive drab, sand, ghost grey and dark navy, and the only saturated
+colour on them occupies a few square pixels: a red nose tip, yellow-black
+chevrons at an intake, a decal, the nozzle glow.
+
+What actually makes them look rich is **value range, not hue**. A single craft
+runs from near-white on sunlit upper surfaces to near-black in panel recesses
+and shadowed undersides. The first attempt failed because every craft sat in a
+narrow mid-grey band and averaged to mush — not because it lacked colour.
+
+So classes are separated by **tone family** (how light, how warm) and by
+silhouette, which was already doing the heavy lifting. Each carries a wide
+internal value ramp plus a handful of small saturated marks: red nose tip, hazard
+chevrons at the intakes, a white tail stencil, a squadron roundel. Specular was
+sharpened at the same time — polished leading edges catching a tight moving
+highlight is the other half of why the reference looks expensive.
+
+
+
 Each class carries a baked scheme: a dark upper surface grading to lighter
 outboard skin, a dielectric radome at the nose, heat-stained bare metal at the
 exhaust, spine and tail trim, and a squadron roundel on each wing. The material
@@ -590,6 +615,8 @@ is baked underneath. Bodies are now tinted by `hullFor()`'s muted hull, and the
 neon palette is reserved for what it was for: lamps, exhaust and weapon fire.
 
 ### Structures
+
+
 
 Islands, bases, convoys and reefs carry baked structures — hangars, control
 towers, radar, fuel silos, cranes, container stacks, bunkers, groves and rock
