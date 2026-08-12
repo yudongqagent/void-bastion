@@ -2197,9 +2197,17 @@ export class Game {
         // SIEGE WALKER — advances and retreats in stomps rather than gliding,
         // firing a wall of fire with one gap that slides across the lane. You
         // survive by being in the gap, not by being far away.
-        const stomp = Math.floor(e.t * 0.9);
-        const ease = 1 - Math.pow(1 - ((e.t * 0.9) % 1), 3);
-        e.x = this.cx + Math.sin(stomp * 1.7) * this.fieldW * (P2 ? 0.38 : 0.30) * ease;
+        // Walks BETWEEN stomp positions. The previous version multiplied the
+        // target by an ease that reset to 0 each step, so at every stomp
+        // boundary the walker snapped back to centre and eased out again —
+        // a teleport roughly once a second.
+        const phase = e.t * 0.9;
+        const stomp = Math.floor(phase);
+        const k = 1 - Math.pow(1 - (phase % 1), 3);
+        const amp = this.fieldW * (P2 ? 0.38 : 0.30);
+        const from = Math.sin(stomp * 1.7) * amp;
+        const to = Math.sin((stomp + 1) * 1.7) * amp;
+        e.x = this.cx + from + (to - from) * k;
         if (e.fireT <= 0) {
           e.fireT = P2 ? 0.95 : 1.5;
           const span = P2 ? 7 : 5;
@@ -2243,7 +2251,8 @@ export class Game {
         // RAIL FORTRESS — nearly stationary, and kills by denying space. The
         // columns telegraph, so this is a positioning fight: it is asking where
         // you intend to be in a second, not where you are.
-        e.x += (this.cx + Math.sin(e.t * 0.32) * this.fieldW * 0.22 - e.x) * 0.9 * dt;
+        const tx2 = this.cx + Math.sin(e.t * 0.32) * this.fieldW * 0.22;
+        e.x += (tx2 - e.x) * (1 - Math.pow(0.06, dt));
         if (e.fireT <= 0) {
           e.fireT = P2 ? 2.1 : 3.4;
           if (P2) {
@@ -2267,7 +2276,11 @@ export class Game {
         // divide. The pressure is cumulative: every second you spend shooting
         // the barge is a second the brood is multiplying.
         e.x = this.cx + Math.sin(e.t * 0.6) * this.fieldW * 0.28;
-        e.y = this.y0 + this.fieldH * (0.20 + Math.sin(e.t * 0.4) * 0.05);
+        // Eased, not assigned. Assigning y teleported the barge the instant it
+        // finished its entry descent — a 49px jump in a single frame, because
+        // its station sits above the holdY every boss descends to.
+        const hy = this.y0 + this.fieldH * (0.20 + Math.sin(e.t * 0.4) * 0.05);
+        e.y += (hy - e.y) * (1 - Math.pow(0.05, dt));
         if (e.fireT <= 0) {
           e.fireT = P2 ? 1.4 : 2.2;
           for (let k = -1; k <= 1; k += 2) this.spawnEscort(e, k * 30, 'splitter', 0.05, 'weave');
@@ -2288,10 +2301,15 @@ export class Game {
         e.blinkT = (e.blinkT || 0) - dt;
         if (e.blinkT <= 0) {
           e.blinkT = P2 ? 2.2 : 3.6;
+          // Collapse where it was, expand where it arrives. Without both halves
+          // a teleport is indistinguishable from a rendering glitch.
+          this.spawnRing(e.x, e.y, e.radius * 2.2, [0.8, 0.4, 1.5], 0.22);
           this.spawnExplosion(e.x, e.y, e.radius * 0.7, [0.8, 0.4, 1.5], false);
           e.x = this.x0 + this.fieldW * (0.22 + this.fxRandom() * 0.56);
           e.y = this.y0 + this.fieldH * (0.14 + this.fxRandom() * 0.16);
-          this.spawnRing(e.x, e.y, e.radius * 2.4, [0.8, 0.4, 1.5], 0.35);
+          this.spawnRing(e.x, e.y, e.radius * 2.6, [0.8, 0.4, 1.5], 0.40);
+          this.spawnParticle(e.x, e.y, 0, 0, 0.18, e.radius * 2.0, [0.8, 0.4, 1.5], 1, 2);
+          this.synth.ability();
         }
         if (e.fireT <= 0) {
           e.fireT = P2 ? 1.5 : 2.4;

@@ -283,16 +283,25 @@ export class Terrain {
 
     // Whitecaps: short bright dashes on the swell crests. Cheap, and it is what
     // makes the surface read as moving water rather than a scrolling gradient.
+    // Seeded from a stable WORLD band index, not from the screen y.
+    //
+    // Seeding from y was a real bug: y scrolls every frame, so each cap's
+    // horizontal position was re-randomised 60 times a second and the sea was
+    // covered in flickering white dashes. Anything scattered over scrolling
+    // terrain has to be keyed to a coordinate that does not move with it.
     const capSpacing = 156;
-    const capOff = (scroll * 1.15 % capSpacing + capSpacing) % capSpacing;
-    for (let y = y0 - capSpacing + capOff; y < y1 + capSpacing; y += capSpacing) {
+    const drift = scroll * 1.15;
+    const firstBand = Math.floor((y0 - drift) / capSpacing) - 1;
+    const lastBand = Math.ceil((y1 - drift) / capSpacing) + 1;
+    for (let b = firstBand; b <= lastBand; b++) {
+      const y = b * capSpacing + drift;
       for (let k = 0; k < 3; k++) {
-        const seed = Math.sin((y * 0.031 + k * 12.9)) * 43758.5453;
+        const seed = Math.sin(b * 12.9898 + k * 78.233) * 43758.5453;
         const fx = seed - Math.floor(seed);
         const cx = x0 + fx * w;
         const wob = Math.sin((y + scroll) * 0.02 + time * 0.6) * 10;
         R.beam(cx - 9, y + wob, cx + 9, y + wob, 1.0,
-          pal.surf[0] * 1.6, pal.surf[1] * 1.6, pal.surf[2] * 1.6, 0.16, 0.85);
+          pal.surf[0] * 1.45, pal.surf[1] * 1.45, pal.surf[2] * 1.45, 0.13, 0.85);
       }
     }
   }
