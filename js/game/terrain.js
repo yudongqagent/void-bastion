@@ -260,6 +260,18 @@ export class Terrain {
     const WATER_DIM = 0.55;
     R.slabLit((x0 + x1) / 2, (y0 + y1) / 2, w / 2, h / 2, 0,
       pal.water[0] * WATER_DIM, pal.water[1] * WATER_DIM, pal.water[2] * WATER_DIM, 1, 0);
+
+    // Caustics: two counter-drifting bands of soft light. The sea was a flat
+    // plate with a few swell lines, which is the single biggest reason the
+    // lower half of the screen read as empty rather than as water.
+    const causticRows = 7;
+    for (let i = 0; i < causticRows; i++) {
+      const phase = time * 0.13 + i * 1.7;
+      const cy = y0 + ((i / causticRows) * h + (scroll * 0.35) % h + h) % h;
+      const cx = (x0 + x1) / 2 + Math.sin(phase) * w * 0.30;
+      R.glow(cx, cy, w * 0.42, pal.surf[0], pal.surf[1], pal.surf[2],
+        0.030 + Math.sin(phase * 1.7) * 0.012, 2.8);
+    }
     // Swell: long faint lines drifting down at the world's speed.
     const spacing = 78;
     const off = (scroll % spacing + spacing) % spacing;
@@ -267,6 +279,44 @@ export class Terrain {
       const wob = Math.sin((y + scroll) * 0.02 + time * 0.6) * 10;
       R.beam(x0 - 20, y + wob, x1 + 20, y + wob * 0.6, 1.1,
         pal.surf[0], pal.surf[1], pal.surf[2], 0.07, 0.9);
+    }
+
+    // Whitecaps: short bright dashes on the swell crests. Cheap, and it is what
+    // makes the surface read as moving water rather than a scrolling gradient.
+    const capSpacing = 156;
+    const capOff = (scroll * 1.15 % capSpacing + capSpacing) % capSpacing;
+    for (let y = y0 - capSpacing + capOff; y < y1 + capSpacing; y += capSpacing) {
+      for (let k = 0; k < 3; k++) {
+        const seed = Math.sin((y * 0.031 + k * 12.9)) * 43758.5453;
+        const fx = seed - Math.floor(seed);
+        const cx = x0 + fx * w;
+        const wob = Math.sin((y + scroll) * 0.02 + time * 0.6) * 10;
+        R.beam(cx - 9, y + wob, cx + 9, y + wob, 1.0,
+          pal.surf[0] * 1.6, pal.surf[1] * 1.6, pal.surf[2] * 1.6, 0.16, 0.85);
+      }
+    }
+  }
+
+  /**
+   * Cloud shadows crossing the map.
+   *
+   * Drawn ABOVE the terrain and below the craft, at a different scroll rate
+   * from everything else, so the world gains a layer it did not have. This is
+   * the cheapest parallax available — no new geometry, just soft dark ellipses
+   * moving at their own speed — and it does more for depth than anything else
+   * of comparable cost.
+   */
+  renderCloudShadows(R, time, x0, x1, y0, y1, scroll) {
+    const w = x1 - x0, h = y1 - y0;
+    const span = h * 1.9;
+    for (let i = 0; i < 5; i++) {
+      const seed = i * 7.13;
+      const drift = (scroll * 0.55 + i * span * 0.37) % span;
+      const cy = y0 - h * 0.4 + ((drift % span) + span) % span;
+      const cx = x0 + (0.5 + Math.sin(seed) * 0.42) * w + Math.sin(time * 0.05 + seed) * w * 0.06;
+      const r = w * (0.34 + (Math.sin(seed * 2.1) * 0.5 + 0.5) * 0.30);
+      R.glow(cx, cy, r, 0.0, 0.0, 0.02, 0.16, 2.2);
+      R.glow(cx + r * 0.42, cy + r * 0.22, r * 0.62, 0.0, 0.0, 0.02, 0.12, 2.2);
     }
   }
 
@@ -280,7 +330,8 @@ export class Terrain {
           for (const l of f.lobes) {
             const x = f.x + l.dx, y = f.y + l.dy;
             // Surf ring, beach, then the land plate on top.
-            R.poly(x, y, l.r * 1.16, l.sides, l.rot, pal.surf[0], pal.surf[1], pal.surf[2], 0.22);
+            R.ring(x, y, l.r * 1.12, 2.4, pal.surf[0] * 1.35, pal.surf[1] * 1.35,
+              pal.surf[2] * 1.35, 0.20);
            R.polyLit(x, y, l.r * 1.05, l.sides, l.rot, pal.sand[0], pal.sand[1], pal.sand[2], 0.9, 0.5,
               MAT.SHORE, 46);
             R.polyLit(x, y, l.r * 0.82, l.sides, l.rot + 0.3, pal.land[0], pal.land[1], pal.land[2], 1, 0.75,
@@ -321,7 +372,24 @@ export class Terrain {
         default: {
           for (const rk of f.rocks) {
             const x = f.x + rk.dx, y = f.y + rk.dy;
-            R.poly(x, y, rk.r * 1.3, rk.sides, rk.rot, pal.surf[0], pal.surf[1], pal.surf[2], 0.18);
+            // Wash ring stays (it is the water breaking), but the rock itself is
+            // a baked outcrop now. A flat lit polygon was the last placeholder
+            // shape on the map and it showed next to everything else.
+            // Surf, not a slab. At 1.3x radius and 0.18 alpha this was a flat
+            // translucent polygon larger than the rock inside it — the most
+            // obviously untextured thing left on the map once the rock itself
+            // was baked. A thin broken ring reads as water breaking on stone.
+            R.ring(x, y, rk.r * 1.16, 2.0, pal.surf[0] * 1.4, pal.surf[1] * 1.4,
+              pal.surf[2] * 1.4, 0.22);
+            R.glow(x, y, rk.r * 1.5, pal.surf[0], pal.surf[1], pal.surf[2], 0.06, 2.6);
+            if (layerOf) {
+              const layer = layerOf('outcrop');
+              if (layer >= 0) {
+                R.craftShadow(x + rk.r * 0.26, y + rk.r * 0.20, rk.r * 1.35, rk.rot, layer, 0.30);
+                R.craft(x, y, rk.r * 1.35, rk.rot, layer, 0.40, 0.40, 0.40, 1, [0.44, 0.40, 0.30]);
+                continue;
+              }
+            }
             R.polyLit(x, y, rk.r, rk.sides, rk.rot, pal.land[0] * 1.1, pal.land[1] * 1.1, pal.land[2] * 1.1, 1, 0.8,
               MAT.ISLAND, 40);
           }

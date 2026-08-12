@@ -73,6 +73,11 @@ html, body {
 /* ── top HUD ──────────────────────────────────────────────────── */
 
 #hud {
+  /* A framed bar rather than text floating over the playfield. Without an
+     edge the readouts read as debug overlay, not as instrumentation. */
+  background: linear-gradient(180deg, rgba(6,9,16,.92) 0%, rgba(6,9,16,.66) 68%, rgba(6,9,16,0) 100%);
+  border-bottom: 1px solid rgba(90,140,200,.16);
+  box-shadow: 0 6px 18px -10px rgba(0,0,0,.9);
   position: fixed;
   top: 0; left: 0; right: 0;
   z-index: 10;
@@ -800,7 +805,12 @@ kbd {
 /* ── desktop: drawer becomes a permanent side column ──────────── */
 
 @media (min-width: 860px) and (orientation: landscape) {
-  #hud { padding: 12px 14px 10px; max-width: calc(100% - 350px); }
+  #hud {
+  /* A framed bar rather than text floating over the playfield. Without an
+     edge the readouts read as debug overlay, not as instrumentation. */
+  background: linear-gradient(180deg, rgba(6,9,16,.92) 0%, rgba(6,9,16,.66) 68%, rgba(6,9,16,0) 100%);
+  border-bottom: 1px solid rgba(90,140,200,.16);
+  box-shadow: 0 6px 18px -10px rgba(0,0,0,.9); padding: 12px 14px 10px; max-width: calc(100% - 350px); }
   #abilities { right: 340px; bottom: 22px; }
   .drawer {
     top: 0; bottom: 0; left: auto;

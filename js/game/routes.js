@@ -23,34 +23,40 @@
  */
 const ROUTES = {
   /** Straight down the lane. The baseline, and still the most common. */
-  transit: (lane) => [[lane, 0.25], [lane, 0.65], [lane, 1.25]],
+  transit: (lane) => [[lane, 0.30], [lane, 0.72], [lane, 1.25]],
 
   /** Enters high, sweeps across the middle, exits the far side. */
   sweep: (lane, dir) => [
-    [lane, 0.18], [lane + dir * 0.45, 0.42], [lane + dir * 0.80, 0.62], [lane + dir * 1.15, 0.85],
+    [lane, 0.20], [lane + dir * 0.45, 0.48], [lane + dir * 0.80, 0.74], [lane + dir * 1.15, 1.00],
   ],
 
   /** A long S through the playfield — reads as a patrol, not an attack. */
   serpent: (lane, dir) => [
-    [lane, 0.16], [lane + dir * 0.30, 0.34], [lane - dir * 0.25, 0.54],
-    [lane + dir * 0.28, 0.74], [lane, 1.15],
+    [lane, 0.18], [lane + dir * 0.30, 0.40], [lane - dir * 0.25, 0.62],
+    [lane + dir * 0.28, 0.84], [lane, 1.20],
   ],
 
   /** Dives to the lower third, turns and climbs back out. A strafing run. */
   strafe: (lane, dir) => [
-    [lane, 0.22], [lane + dir * 0.18, 0.58], [lane + dir * 0.55, 0.72],
-    [lane + dir * 0.85, 0.40], [lane + dir * 1.10, -0.15],
+    [lane, 0.26], [lane + dir * 0.18, 0.70], [lane + dir * 0.55, 0.88],
+    [lane + dir * 0.85, 0.46], [lane + dir * 1.10, -0.15],
   ],
 
   /** Comes down one side, crosses the bottom, exits the other. */
   hook: (lane, dir) => [
-    [lane, 0.30], [lane, 0.62], [lane + dir * 0.55, 0.78], [lane + dir * 1.15, 0.72],
+    [lane, 0.34], [lane, 0.74], [lane + dir * 0.55, 0.92], [lane + dir * 1.15, 0.86],
   ],
 
   /** Holds a mid-field orbit for a while before leaving — artillery behaviour. */
   orbit: (lane, dir) => [
-    [lane, 0.28], [lane + dir * 0.22, 0.40], [lane, 0.52],
-    [lane - dir * 0.22, 0.40], [lane, 0.28], [lane, -0.2],
+    [lane, 0.32], [lane + dir * 0.22, 0.50], [lane, 0.66],
+    [lane - dir * 0.22, 0.50], [lane, 0.32], [lane, -0.2],
+  ],
+
+  /** Enters low from the side and climbs out — fills the bottom of the lane. */
+  lowPass: (lane, dir) => [
+    [lane, 0.42], [lane + dir * 0.30, 0.82], [lane + dir * 0.70, 0.95],
+    [lane + dir * 1.15, 0.60],
   ],
 };
 
@@ -70,9 +76,9 @@ export function makeRoute(name, lane, dir) {
  * than the default, and everything else is going somewhere of its own.
  */
 export const ROUTE_POOL = {
-  swarm:  ['transit', 'strafe', 'hook'],
-  weave:  ['serpent', 'sweep', 'transit'],
-  dive:   ['transit', 'strafe', 'sweep'],
+  swarm:  ['transit', 'strafe', 'hook', 'lowPass'],
+  weave:  ['serpent', 'sweep', 'transit', 'lowPass'],
+  dive:   ['transit', 'strafe', 'sweep', 'hook'],
   hover:  ['orbit', 'transit'],
 };
 

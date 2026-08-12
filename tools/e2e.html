@@ -33,8 +33,13 @@
   // The fallback is what almost every capture actually runs at, since this pane
   // reports innerWidth as 0 — so it needs to be a real handset rather than a
   // rounded-off guess. 390x844 is an iPhone 14/15 CSS viewport.
-  const VIEW_W = window.innerWidth || 390;
-  const VIEW_H = window.innerHeight || 844;
+  // ?w= and ?h= force a size. The pane's reported viewport is not stable
+  // between runs — it has come back as 0, as 390x844 and as 980x2121 — so any
+  // capture meant to represent a real device has to state the size explicitly
+  // rather than hope the window cooperates.
+  const _q = new URLSearchParams(location.search);
+  const VIEW_W = +_q.get('w') || window.innerWidth || 390;
+  const VIEW_H = +_q.get('h') || window.innerHeight || 844;
   Object.defineProperty(window, 'innerWidth', { get: () => VIEW_W, configurable: true });
   Object.defineProperty(window, 'innerHeight', { get: () => VIEW_H, configurable: true });
   Object.defineProperty(window, 'devicePixelRatio', { get: () => 1, configurable: true });

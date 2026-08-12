@@ -43,6 +43,7 @@ const stubRenderer = {
   push() { this.calls++; },
   glow() { this.calls++; }, disc() { this.calls++; }, ring() { this.calls++; },
   poly() { this.calls++; }, beam() { this.calls++; }, spark() { this.calls++; },
+  ellipseLit() { this.calls++; },
   polyLit() { this.calls++; }, discLit() { this.calls++; },
   slabLit() { this.calls++; }, beamLit() { this.calls++; },
   flush() {},

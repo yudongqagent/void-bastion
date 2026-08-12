@@ -15,7 +15,7 @@
 
 export const SECTORS = [
   {
-    id: 'outer-reach',
+    id: 'outer-reach', grade: [1.00, 1.02, 1.10], saturation: 1.00, rain: 0,
     name: 'OUTER REACH',
     tagline: 'Open space. Clear skies.',
     bg: [0.017, 0.021, 0.043],
@@ -26,7 +26,7 @@ export const SECTORS = [
     note: 'Baseline space.',
   },
   {
-    id: 'asteroid-belt',
+    id: 'asteroid-belt', grade: [1.10, 1.02, 0.88], saturation: 0.88, rain: 0,
     name: 'ASTEROID BELT',
     tagline: 'Rock everywhere. Mind the drift.',
     bg: [0.030, 0.023, 0.036],
@@ -37,7 +37,7 @@ export const SECTORS = [
     note: '+18% coins from ore salvage.',
   },
   {
-    id: 'ion-storm',
+    id: 'ion-storm', grade: [0.92, 1.00, 1.16], saturation: 1.06, rain: 1,
     name: 'ION STORM',
     tagline: 'Lightning stuns whatever it touches.',
     bg: [0.022, 0.026, 0.062],
@@ -49,7 +49,7 @@ export const SECTORS = [
     note: 'Faster run, faster enemies — but storm arcs stun them.',
   },
   {
-    id: 'crimson-nebula',
+    id: 'crimson-nebula', grade: [1.14, 0.94, 0.96], saturation: 1.02, rain: 0,
     name: 'CRIMSON NEBULA',
     tagline: 'The swarm knits itself back together.',
     bg: [0.048, 0.013, 0.024],
@@ -62,7 +62,7 @@ export const SECTORS = [
     note: 'Enemies regenerate, but pay far better.',
   },
   {
-    id: 'derelict-fleet',
+    id: 'derelict-fleet', grade: [0.98, 1.00, 0.98], saturation: 0.80, rain: 1,
     name: 'DERELICT FLEET',
     tagline: 'Dead hulls drifting in the lane.',
     bg: [0.020, 0.029, 0.033],
@@ -73,7 +73,7 @@ export const SECTORS = [
     note: 'Tougher enemies, but they move slowly here.',
   },
   {
-    id: 'void-rift',
+    id: 'void-rift', grade: [1.04, 0.94, 1.16], saturation: 1.10, rain: 0,
     name: 'VOID RIFT',
     tagline: 'Reality thins. Everything comes at once.',
     bg: [0.029, 0.013, 0.050],

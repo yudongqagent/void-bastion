@@ -209,6 +209,10 @@ export class Game {
     this.fxSeed = 0x9e3779b9;
     this.shieldFlash = 0;
     this.shieldAng = 0;
+    this.hurtT = 0;
+    this.hurtAng = 0;
+    this.bossIntro = 0;
+    this.bossName = '';
     this.scrollSpeed = 150;
     this.layers = [];
     this.nebulae = [];
@@ -636,7 +640,15 @@ export class Game {
       e.wp = 0;
     }
 
-    if (def.boss) this.flash([0.35, 0.05, 0.1], 0.5);
+    if (def.boss) {
+      this.flash([0.35, 0.05, 0.1], 0.5);
+      // An entrance. A boss that simply appears among the chaff is just a big
+      // enemy; the name card is what makes it an event.
+      this.bossIntro = 2.6;
+      this.bossName = (def.bossDef && def.bossDef.name) || 'BOSS';
+      this.bossTell = (def.bossDef && def.bossDef.tell) || '';
+      this.synth.boss();
+    }
     return e;
   }
 
@@ -1154,6 +1166,12 @@ export class Game {
       run.hull -= dmg;
       this.synth.towerHit();
       this.flash([0.4, 0.06, 0.1], 0.32);
+      // A bearing on the hit. Losing hull with no idea which side it came from
+      // is the least readable thing left in the fight.
+      this.hurtT = 0.42;
+      this.hurtAng = source
+        ? Math.atan2(source.y - this.ship.y, source.x - this.ship.x)
+        : -Math.PI / 2;
     }
     if (source && s.thorns > 0) this.damageEnemy(source, source.dmg * s.thorns, false, false);
     if (run.hull <= 0 && !run.over) this.endRun();
@@ -1296,6 +1314,59 @@ export class Game {
     // The flash does the work: brief, bright, and sized to the target.
     this.spawnParticle(x, y, 0, 0, big ? 0.22 : 0.10,
       radius * (big ? 3.0 : 1.7), color, 1, 2);
+
+    // Shockwave. One thin expanding ring, which is what reads as force — the
+    // particle burst alone says "something disappeared", the ring says
+    // "something detonated".
+    this.spawnRing(x, y, radius * (big ? 4.2 : 2.3),
+      [1.5, 1.15, 0.75], big ? 0.34 : 0.20);
+
+    // Arcing debris: a few fast shards that decelerate, unlike the fireball
+    // particles which are pure radial spray.
+    const shards = big ? 9 : Math.round(2 + 3 * scale);
+    for (let i = 0; i < shards; i++) {
+      const a = this.fxRandom() * TAU;
+      const sp = 180 + this.fxRandom() * (big ? 460 : 260);
+      this.spawnParticle(x, y, Math.cos(a) * sp, Math.sin(a) * sp,
+        0.28 + this.fxRandom() * 0.26, 1.4 + this.fxRandom() * 1.6,
+        [0.85, 0.72, 0.55], 0.80, 1);
+    }
+
+    if (big) {
+      // Secondary detonations, staggered around the hull. A capital kill should
+      // come apart over a beat rather than in one frame.
+      for (let i = 0; i < 4; i++) {
+        const a = this.fxRandom() * TAU;
+        const d = radius * (0.3 + this.fxRandom() * 0.6);
+        this.addSecondary(x + Math.cos(a) * d, y + Math.sin(a) * d,
+          radius * 0.32, color, 0.09 + i * 0.11);
+      }
+    }
+  }
+
+  /** A delayed pop, used to stagger a big kill over a few frames. */
+  addSecondary(x, y, radius, color, delay) {
+    (this.secondaries || (this.secondaries = [])).push({ x, y, radius, color, t: delay });
+  }
+
+  updateSecondaries(dt) {
+    const list = this.secondaries;
+    if (!list || !list.length) return;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const s2 = list[i];
+      s2.t -= dt;
+      if (s2.t > 0) continue;
+      list.splice(i, 1);
+      const n = 5;
+      for (let k = 0; k < n; k++) {
+        const a = this.fxRandom() * TAU;
+        const sp = 90 + this.fxRandom() * 190;
+        this.spawnParticle(s2.x, s2.y, Math.cos(a) * sp, Math.sin(a) * sp,
+          0.16 + this.fxRandom() * 0.16, 2 + this.fxRandom() * 2.4, s2.color, 0.86, 1);
+      }
+      this.spawnParticle(s2.x, s2.y, 0, 0, 0.10, s2.radius * 1.8, s2.color, 1, 2);
+      this.synth.hit();
+    }
   }
 
   /**
@@ -1507,10 +1578,13 @@ export class Game {
     this.updateSystems(dt);
     this.updatePickups(dt);
     this.updateWrecks(dt);
+    this.updateSecondaries(dt);
     this.updateParticles(dt);
     this.updateFloaters(dt);
     this.updateRegen(dt);
     if (this.shieldFlash > 0) this.shieldFlash = Math.max(0, this.shieldFlash - dtRaw);
+    if (this.hurtT > 0) this.hurtT = Math.max(0, this.hurtT - dtRaw);
+    if (this.bossIntro > 0) this.bossIntro = Math.max(0, this.bossIntro - dtRaw);
     this.decayFeedback(dtRaw);
   }
 
@@ -2553,10 +2627,34 @@ export class Game {
     R.flash[2] = this.flashColor[2] * this.flashAmount;
 
     const pal = groundFor(this.sector.id);
+    const sec = this.sector;
+    R.grade = sec.grade || [1, 1, 1];
+    R.saturation = sec.saturation != null ? sec.saturation : 1;
+
     this.terrain.renderWater(R, pal, time, this.x0, this.x1, this.y0, this.y1, this.scroll);
     this.renderBackdrop(time);
     this.terrain.render(R, pal, time, this.y0, this.y1,
       R.craftReady ? (t) => this.craftLayer(t) : null);
+    // Above the map, below the aircraft: a moving layer the world did not have.
+    this.terrain.renderCloudShadows(R, time, this.x0, this.x1, this.y0, this.y1, this.scroll);
+
+    // Weather. Rain is drawn as fast near-vertical streaks at TWO depths, so it
+    // carries parallax of its own rather than sitting on a single plane.
+    if (sec.rain) {
+      for (let layer = 0; layer < 2; layer++) {
+        const n = layer === 0 ? 26 : 18;
+        const speed = layer === 0 ? 1500 : 950;
+        const len = layer === 0 ? 26 : 17;
+        const al = layer === 0 ? 0.20 : 0.12;
+        for (let i = 0; i < n; i++) {
+          const seed = i * 37.7 + layer * 11.3;
+          const fx = (Math.sin(seed) * 43758.5453) % 1;
+          const px = this.x0 + ((fx + 1) % 1) * this.fieldW;
+          const py = this.y0 + (((time * speed + i * 137.3) % (this.fieldH + 200)) - 100);
+          R.beam(px, py, px + 5, py + len, 0.9, 0.62, 0.74, 0.95, al, 0.9);
+        }
+      }
+    }
     this.renderWrecks();
     this.renderPickups(time);
     this.renderEnemies(time);
@@ -2633,12 +2731,16 @@ export class Game {
         } else {
           // Face: a squashed disc, with a darker inner field so it reads as
           // struck metal rather than as a dot of light.
-          R.slabLit(p.x, y, R0 * w, R0, 0, c[0], c[1], c[2] * 0.75, 1, 0.85);
-          R.slabLit(p.x, y, R0 * w * 0.62, R0 * 0.62, 0,
-            c[0] * 0.72, c[1] * 0.62, c[2] * 0.35, 1, 0.7);
+          // A real ELLIPSE. The previous version narrowed a rectangle, and a
+          // narrowing rectangle is still a rectangle — the coins read as gold
+          // bricks. A disc with independent radii is an actual coin turning.
+          const rx = Math.max(0.7, R0 * w);
+          R.ellipseLit(p.x, y, rx, R0, 0, c[0], c[1], c[2] * 0.72, 1, 0.9);
+          R.ellipseLit(p.x, y, rx * 0.60, R0 * 0.60, 0,
+            c[0] * 0.70, c[1] * 0.58, c[2] * 0.30, 1, 0.75);
           // Specular streak that slides across the face as it turns.
-          R.slabLit(p.x - R0 * w * 0.34, y - R0 * 0.2, R0 * w * 0.16, R0 * 0.34, 0,
-            1.5, 1.4, 1.0, 0.85 * w, 0);
+          R.ellipseLit(p.x - rx * 0.36, y - R0 * 0.22, rx * 0.20, R0 * 0.30, 0,
+            1.55, 1.45, 1.05, 0.85 * w, 0);
         }
         // A small amount of glow, only enough to make it catch the eye.
         R.glow(p.x, y, 8, c[0], c[1], c[2], 0.22 + 0.16 * w, 2.0);
@@ -3113,6 +3215,25 @@ export class Game {
         20 * k, sc[0], sc[1], sc[2], 0.42 * k, 2.0);
     }
 
+    if (this.hurtT > 0) {
+      const k = this.hurtT / 0.42;
+      const a = this.hurtAng;
+      for (let i = -2; i <= 2; i++) {
+        const aa = a + i * 0.30;
+        const px = x + Math.cos(aa) * 40, py = y + Math.sin(aa) * 40;
+        R.slabLit(px, py, 9 * (1 - Math.abs(i) * 0.28), 2.0 + 2.4 * k, aa + Math.PI / 2,
+          1.6, 0.28, 0.24, 0.55 * k * (1 - Math.abs(i) * 0.3), 0);
+      }
+    }
+
+    // Wake: a soft disturbance trailing under the ship, so it reads as flying
+    // low over water rather than pasted on top of it.
+    for (let i = 1; i <= 3; i++) {
+      const t2 = i / 3;
+      R.glow(x - bank * 3 * t2, y + 26 + i * 15, 13 - i * 2.4,
+        0.72, 0.86, 1.0, 0.055 * (1 - t2), 2.4);
+    }
+
     // Engine plume, tight and at the nozzle rather than a halo around the hull.
     const plume = ship.thrust;
     R.glow(x - bank * 5, y + 19, 11 * plume, c[0], c[1], c[2], 0.5, 1.7);
@@ -3159,6 +3280,39 @@ export class Game {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     this.renderShipStatus(ctx);
+
+    // Boss name card: slides in, holds, fades. Deliberately on the overlay
+    // rather than in the world, so it never fights the fight for space.
+    if (this.bossIntro > 0) {
+      const T = 2.6;
+      const t = 1 - this.bossIntro / T;
+      const slide = t < 0.18 ? 1 - t / 0.18 : 0;
+      const fade = t > 0.78 ? 1 - (t - 0.78) / 0.22 : 1;
+      const cy = this.h * 0.30;
+      ctx.save();
+      ctx.globalAlpha = fade;
+      ctx.translate(-slide * this.w * 0.5, 0);
+
+      // Banner plate.
+      ctx.fillStyle = 'rgba(8,10,16,0.72)';
+      ctx.fillRect(0, cy - 30, this.w, 60);
+      ctx.fillStyle = 'rgba(255,90,70,0.85)';
+      ctx.fillRect(0, cy - 30, this.w, 2);
+      ctx.fillRect(0, cy + 28, this.w, 2);
+
+      ctx.fillStyle = '#ff8a6e';
+      ctx.font = '700 9px ui-monospace, "SF Mono", Menlo, monospace';
+      ctx.fillText('WARNING', this.w / 2, cy - 17);
+      ctx.fillStyle = '#fff';
+      ctx.font = '700 20px ui-monospace, "SF Mono", Menlo, monospace';
+      ctx.fillText(this.bossName || 'BOSS', this.w / 2, cy + 2);
+      if (this.bossTell) {
+        ctx.fillStyle = 'rgba(200,215,235,0.75)';
+        ctx.font = '500 9px ui-monospace, "SF Mono", Menlo, monospace';
+        ctx.fillText(this.bossTell, this.w / 2, cy + 19);
+      }
+      ctx.restore();
+    }
     for (const f of this.floaters) {
       const t = f.life / f.maxLife;
       const size = 13 * f.scale;

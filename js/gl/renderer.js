@@ -341,6 +341,11 @@ uniform sampler2D u_bloom2;
 uniform float u_intensity;
 uniform vec3 u_flash;
 uniform float u_vignette;
+// Per-sector grade: a channel gain plus a saturation term. A palette swap
+// alone leaves every zone feeling like the same place in a different hue;
+// grading the final image is what makes one read as cold and another as dusty.
+uniform vec3 u_grade;
+uniform float u_sat;
 out vec4 outColor;
 void main() {
   vec3 scene = texture(u_scene, v_uv).rgb;
@@ -351,8 +356,14 @@ void main() {
   // instead of banding, which is what keeps the neon from looking flat.
   c = c / (1.0 + c * 0.42) * 1.42;
 
+  c *= u_grade;
+  float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  c = mix(vec3(lum), c, u_sat);
+
   vec2 d = v_uv - 0.5;
-  c *= 1.0 - u_vignette * dot(d, d) * 1.8;
+  // Slightly stronger, and biased to the corners rather than a round falloff,
+  // which suits a tall playfield better than a circular one.
+  c *= 1.0 - u_vignette * (dot(d, d) * 1.7 + abs(d.x) * abs(d.y) * 2.2);
 
   outColor = vec4(c, 1.0);
 }`;
@@ -442,6 +453,8 @@ export class Renderer {
     this.flash = [0, 0, 0];
     this.bloomIntensity = 0.62;
     this.bloomThreshold = 0.95;
+    this.grade = [1, 1, 1];
+    this.saturation = 1;
     this.vignette = 0.55;
   }
 
@@ -663,6 +676,20 @@ export class Renderer {
   polyLit(x, y, radius, sides, rot, r, g, b, a, shade = 1, mat = -1, uv = 48) {
     this.push(SHAPE.POLY, x, y, radius, radius, rot, r, g, b, a, sides, shade, mat, uv);
   }
+  /**
+   * A disc with independent radii — an ellipse.
+   *
+   * The quad is scaled non-uniformly and the DISC shader measures length() in
+   * the LOCAL frame, so this comes out as a true ellipse rather than a squashed
+   * bitmap. Needed for anything turning in 3D: a spinning coin is a circle
+   * whose width is the cosine of its angle, and drawing that as a narrowing
+   * rectangle just produces a rectangle.
+   */
+  ellipseLit(x, y, rx, ry, rot, r, g, b, a, shade = 1) {
+    this.push(SHAPE.DISC, x, y, Math.max(0.35, rx), Math.max(0.35, ry), rot,
+      r, g, b, a, 0, shade);
+  }
+
   discLit(x, y, radius, r, g, b, a, shade = 1, mat = -1, uv = 48) {
     this.push(SHAPE.DISC, x, y, radius, radius, 0, r, g, b, a, 0, shade, mat, uv);
   }
@@ -787,6 +814,8 @@ export class Renderer {
       gl.uniform1f(this.uComposite.u_intensity, this.bloomIntensity);
       gl.uniform3f(this.uComposite.u_flash, this.flash[0], this.flash[1], this.flash[2]);
       gl.uniform1f(this.uComposite.u_vignette, this.vignette);
+      gl.uniform3f(this.uComposite.u_grade, this.grade[0], this.grade[1], this.grade[2]);
+      gl.uniform1f(this.uComposite.u_sat, this.saturation);
     });
 
     gl.bindVertexArray(null);

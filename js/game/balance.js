@@ -165,34 +165,34 @@ export const GROUND_TYPES = new Set(['turret', 'tank', 'warship', 'sam']);
 
 export const ARCHETYPES = {
   //         from  weight decay   hp    speed  dmg   coin  radius sides  weapon
-  drone:    { name: 'Drone',       from: 1,   weight: 100, decay: 90,  hp: 1.00, speed: 1.15, dmg: 1.00, coin: 1.00, radius: 14, sides: 3 },
-  darter:   { name: 'Darter',      from: 4,   weight: 42,  decay: 110, hp: 0.45, speed: 1.55, dmg: 0.70, coin: 0.85, radius: 13,  sides: 4 },
-  brute:    { name: 'Brute',       from: 8,   weight: 34,  decay: 150, hp: 3.40, speed: 0.95, dmg: 2.10, coin: 2.60, radius: 19, sides: 6 },
-  splitter: { name: 'Splitter',    from: 14,  weight: 26,  decay: 180, hp: 1.30, speed: 1.1, dmg: 1.00, coin: 1.30, radius: 16, sides: 5 },
-  shielder: { name: 'Shielder',    from: 20,  weight: 24,  decay: 220, hp: 1.60, speed: 1.02, dmg: 1.20, coin: 1.90, radius: 17, sides: 6, shield: 1.5 },
-  sentinel: { name: 'Sentinel',    from: 28,  weight: 22,  decay: 240, hp: 1.10, speed: 1.05, dmg: 1.40, coin: 1.80, radius: 15, sides: 4, weapon: 'aimed' },
-  gunship:  { name: 'Gunship',     from: 34,  weight: 24,  decay: 300, hp: 1.90, speed: 0.98, dmg: 1.50, coin: 2.50, radius: 18, sides: 5, weapon: 'homing' },
-  wraith:   { name: 'Wraith',      from: 45,  weight: 20,  decay: 320, hp: 0.90, speed: 1.35, dmg: 1.30, coin: 2.20, radius: 14, sides: 3, phase: true },
-  radial:   { name: 'Radial Gun',  from: 56,  weight: 24,  decay: 400, hp: 2.40, speed: 0.9, dmg: 1.60, coin: 3.10, radius: 18, sides: 8, weapon: 'radial' },
-  lancer:   { name: 'Lancer',      from: 78,  weight: 22,  decay: 460, hp: 2.00, speed: 0.95, dmg: 1.90, coin: 3.40, radius: 16, sides: 4, weapon: 'beam' },
-  dread:    { name: 'Dreadnought', from: 110, weight: 20,  decay: 999, hp: 5.50, speed: 0.86, dmg: 2.60, coin: 5.20, radius: 21, sides: 6, shield: 2.0, weapon: 'spread' },
+  drone:    { name: 'Drone',       from: 1,   weight: 100, decay: 90,  hp: 1.00, speed: 1.15, dmg: 1.00, coin: 1.00, radius: 16, sides: 3 },
+  darter:   { name: 'Darter',      from: 4,   weight: 42,  decay: 110, hp: 0.45, speed: 1.55, dmg: 0.70, coin: 0.85, radius: 15,  sides: 4 },
+  brute:    { name: 'Brute',       from: 8,   weight: 34,  decay: 150, hp: 3.40, speed: 0.95, dmg: 2.10, coin: 2.60, radius: 22, sides: 6 },
+  splitter: { name: 'Splitter',    from: 14,  weight: 26,  decay: 180, hp: 1.30, speed: 1.1, dmg: 1.00, coin: 1.30, radius: 19, sides: 5 },
+  shielder: { name: 'Shielder',    from: 20,  weight: 24,  decay: 220, hp: 1.60, speed: 1.02, dmg: 1.20, coin: 1.90, radius: 20, sides: 6, shield: 1.5 },
+  sentinel: { name: 'Sentinel',    from: 28,  weight: 22,  decay: 240, hp: 1.10, speed: 1.05, dmg: 1.40, coin: 1.80, radius: 18, sides: 4, weapon: 'aimed' },
+  gunship:  { name: 'Gunship',     from: 34,  weight: 24,  decay: 300, hp: 1.90, speed: 0.98, dmg: 1.50, coin: 2.50, radius: 21, sides: 5, weapon: 'homing' },
+  wraith:   { name: 'Wraith',      from: 45,  weight: 20,  decay: 320, hp: 0.90, speed: 1.35, dmg: 1.30, coin: 2.20, radius: 16, sides: 3, phase: true },
+  radial:   { name: 'Radial Gun',  from: 56,  weight: 24,  decay: 400, hp: 2.40, speed: 0.9, dmg: 1.60, coin: 3.10, radius: 21, sides: 8, weapon: 'radial' },
+  lancer:   { name: 'Lancer',      from: 78,  weight: 22,  decay: 460, hp: 2.00, speed: 0.95, dmg: 1.90, coin: 3.40, radius: 19, sides: 4, weapon: 'beam' },
+  dread:    { name: 'Dreadnought', from: 110, weight: 20,  decay: 999, hp: 5.50, speed: 0.86, dmg: 2.60, coin: 5.20, radius: 25, sides: 6, shield: 2.0, weapon: 'spread' },
 
   // --- extremes ------------------------------------------------------------
   // Deliberately spread far wider in hull and damage than the core roster. A
   // swarm where everything has roughly one unit of health and deals roughly one
   // unit of damage is uniform no matter how many shapes it wears; these are the
   // ones that make a wave feel like it has a composition.
-  mite:     { name: 'Mite',        from: 3,   weight: 44,  decay: 240, hp: 0.14, speed: 1.55, dmg: 0.30, coin: 0.30, radius: 12,  sides: 3, pack: 4 },
-  bomber:   { name: 'Bomber',      from: 18,  weight: 26,  decay: 340, hp: 0.55, speed: 1.2, dmg: 5.50, coin: 2.20, radius: 16, sides: 4, blast: 78 },
-  juggernaut:{name: 'Juggernaut',  from: 40,  weight: 18,  decay: 999, hp: 14.0, speed: 0.8, dmg: 1.30, coin: 7.50, radius: 22, sides: 7 },
-  sniper:   { name: 'Rail Sniper', from: 48,  weight: 20,  decay: 520, hp: 0.85, speed: 0.95, dmg: 4.20, coin: 2.90, radius: 14, sides: 3, weapon: 'rail', standoff: 0.14 },
-  warden:   { name: 'Warden',      from: 64,  weight: 18,  decay: 999, hp: 3.20, speed: 0.98, dmg: 0.80, coin: 4.60, radius: 18, sides: 6, aura: 150 },
+  mite:     { name: 'Mite',        from: 3,   weight: 44,  decay: 240, hp: 0.14, speed: 1.55, dmg: 0.30, coin: 0.30, radius: 14,  sides: 3, pack: 4 },
+  bomber:   { name: 'Bomber',      from: 18,  weight: 26,  decay: 340, hp: 0.55, speed: 1.2, dmg: 5.50, coin: 2.20, radius: 19, sides: 4, blast: 78 },
+  juggernaut:{name: 'Juggernaut',  from: 40,  weight: 18,  decay: 999, hp: 14.0, speed: 0.8, dmg: 1.30, coin: 7.50, radius: 26, sides: 7 },
+  sniper:   { name: 'Rail Sniper', from: 48,  weight: 20,  decay: 520, hp: 0.85, speed: 0.95, dmg: 4.20, coin: 2.90, radius: 16, sides: 3, weapon: 'rail', standoff: 0.14 },
+  warden:   { name: 'Warden',      from: 64,  weight: 18,  decay: 999, hp: 3.20, speed: 0.98, dmg: 0.80, coin: 4.60, radius: 21, sides: 6, aura: 150 },
 
   // --- ground emplacements ------------------------------------------------
-  turret:   { name: 'AA Turret',   from: 12,  weight: 24,  decay: 300, hp: 1.60, speed: 0, dmg: 1.10, coin: 1.90, radius: 15, sides: 8, weapon: 'aimed',  ground: true },
-  tank:     { name: 'Gun Tank',    from: 24,  weight: 22,  decay: 340, hp: 2.60, speed: 0, dmg: 1.40, coin: 2.70, radius: 16, sides: 4, weapon: 'aimed',  ground: true },
-  warship:  { name: 'Patrol Boat', from: 38,  weight: 20,  decay: 420, hp: 3.40, speed: 0, dmg: 1.60, coin: 3.40, radius: 20, sides: 4, weapon: 'spread', ground: true },
-  sam:      { name: 'SAM Battery', from: 62,  weight: 18,  decay: 999, hp: 3.00, speed: 0, dmg: 1.90, coin: 4.00, radius: 17, sides: 6, weapon: 'homing', ground: true },
+  turret:   { name: 'AA Turret',   from: 12,  weight: 24,  decay: 300, hp: 1.60, speed: 0, dmg: 1.10, coin: 1.90, radius: 18, sides: 8, weapon: 'aimed',  ground: true },
+  tank:     { name: 'Gun Tank',    from: 24,  weight: 22,  decay: 340, hp: 2.60, speed: 0, dmg: 1.40, coin: 2.70, radius: 19, sides: 4, weapon: 'aimed',  ground: true },
+  warship:  { name: 'Patrol Boat', from: 38,  weight: 20,  decay: 420, hp: 3.40, speed: 0, dmg: 1.60, coin: 3.40, radius: 23, sides: 4, weapon: 'spread', ground: true },
+  sam:      { name: 'SAM Battery', from: 62,  weight: 18,  decay: 999, hp: 3.00, speed: 0, dmg: 1.90, coin: 4.00, radius: 20, sides: 6, weapon: 'homing', ground: true },
 };
 
 /**
