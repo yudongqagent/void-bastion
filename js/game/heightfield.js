@@ -12,10 +12,19 @@
 // landmass can run off the lane and come back, because there is only ever one
 // field rather than a series of islands.
 
-/** Deterministic integer hash -> [0,1). */
+/**
+ * Deterministic integer hash -> [0,1).
+ *
+ * Math.imul, not `*`. The multiply here overflows 2^53, so a plain JS multiply
+ * loses low bits and rounds — which is fine on its own, but this exact field is
+ * also evaluated in GLSL, where a 32-bit multiply wraps precisely. imul gives
+ * JS the same wrapping semantics, so both sides agree bit for bit and a
+ * building can never end up in the sea because the two disagreed about where
+ * the coast was.
+ */
 function hash2(ix, iy) {
-  let h = (ix * 374761393 + iy * 668265263) | 0;
-  h = (h ^ (h >>> 13)) * 1274126177;
+  let h = (Math.imul(ix, 374761393) + Math.imul(iy, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
   h = h ^ (h >>> 16);
   return (h >>> 0) / 4294967296;
 }

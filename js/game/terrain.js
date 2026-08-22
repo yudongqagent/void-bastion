@@ -1,3 +1,5 @@
+import { heightAt, roadAt, buildScore, SEA, SHORE, SCRUB }
+  from './heightfield.js';
 // Scrolling terrain.
 //
 // The lane used to be empty space with a starfield, which reads as "abstract
@@ -147,7 +149,9 @@ function makeReef(rng, x, w) {
   return { kind: 'reef', x, w, rocks, props };
 }
 
-const BUILDERS = [makeIsland, makeIsland, makeBase, makeConvoy, makeReef];
+// Islands, reefs and bases are the heightfield's job now; only ships on open
+// water are still a discrete object.
+const BUILDERS = [makeConvoy];
 
 export class Terrain {
   constructor() {
@@ -166,10 +170,16 @@ export class Terrain {
   reset(y0) {
     this.features.length = 0;
     this.nextY = y0 - 200;
+    // worldY = screenY - originY. Everything the field decides is keyed off
+    // world space, so nothing shimmers as the lane scrolls under it.
+    this.originY = 0;
+    this.fieldSeed = this.fieldSeed || 0;
   }
 
   /** Keep the lane ahead populated and drop anything that has scrolled past. */
   update(dt, scrollPx, x0, x1, y0, y1) {
+    this.originY += scrollPx;
+    this.x0v = x0; this.x1v = x1;
     for (const f of this.features) f.y += scrollPx;
 
     while (this.features.length && this.features[0].y - this.features[0].w > y1 + 260) {
@@ -196,20 +206,29 @@ export class Terrain {
   }
 
   /** Flat, lit deck positions a ground unit can be placed on. */
+  /**
+   * Flat land a ground unit can be placed on, found by asking the field
+   * instead of reading a list of feature decks.
+   */
   anchorPoints(y0, y1) {
     const out = [];
-    for (const f of this.features) {
-      if (f.y < y0 - 120 || f.y > y1) continue;
-      if (f.kind === 'base') {
-        for (const p of f.pads) out.push({ x: f.x + p.dx, y: f.y + p.dy, kind: 'base' });
-      } else if (f.kind === 'island') {
-        for (const l of f.lobes) out.push({ x: f.x + l.dx, y: f.y + l.dy, kind: 'land' });
-      } else if (f.kind === 'convoy') {
-        for (const sh of f.ships) out.push({ x: f.x + sh.dx, y: f.y + sh.dy, kind: 'sea' });
+    const oy = this.originY, seed = this.fieldSeed;
+    const STEP = 26;
+    for (let sy = y0; sy < y1; sy += STEP) {
+      for (let x = this.x0v + 24; x < this.x1v - 24; x += STEP) {
+        // A gun emplacement needs solid ground, not the flat, road-served plot a
+        // hangar wants. Measured across 20km of world: buildScore > 0.5 leaves
+        // 35% of spawn bands with nowhere at all to put a turret, where simply
+        // being above the shoreline covers 88%.
+        if (heightAt(x, sy - oy, seed) > SHORE + 0.006) {
+          out.push({ x, y: sy, kind: 'land' });
+        }
       }
     }
     return out;
   }
+
+
 
   /**
    * What lies under a world point: 'water' or 'land'.
@@ -217,36 +236,16 @@ export class Terrain {
    * Circle approximations of each feature — cheap, and only ever called when a
    * piece of wreckage actually lands, never per frame per entity.
    */
+  /**
+   * What lies under a world point: 'water' or 'land'.
+   *
+   * One field lookup, and the SAME field the shader draws — the hash matches
+   * bit for bit. This used to be a loop of circle approximations over every
+   * feature, which was a second, independent description of where the land
+   * was, and could disagree with what was on screen.
+   */
   surfaceAt(x, y) {
-    for (const f of this.features) {
-      const dy = y - f.y;
-      if (dy < -f.w * 1.6 || dy > f.w * 1.6) continue;
-      switch (f.kind) {
-        case 'island':
-          for (const l of f.lobes) {
-            if (Math.hypot(x - (f.x + l.dx), y - (f.y + l.dy)) < l.r * 1.05) return 'land';
-          }
-          break;
-        case 'base':
-          if (Math.hypot(x - f.x, y - f.y) < f.w * 0.62) return 'land';
-          for (const p of f.pads) {
-            if (Math.abs(x - (f.x + p.dx)) < p.w && Math.abs(y - (f.y + p.dy)) < p.h) return 'land';
-          }
-          break;
-        case 'convoy':
-          for (const sh of f.ships) {
-            if (Math.abs(x - (f.x + sh.dx)) < sh.len * 0.3 &&
-                Math.abs(y - (f.y + sh.dy)) < sh.len) return 'land';
-          }
-          break;
-        default:
-          for (const rk of f.rocks) {
-            if (Math.hypot(x - (f.x + rk.dx), y - (f.y + rk.dy)) < rk.r) return 'land';
-          }
-          break;
-      }
-    }
-    return 'water';
+    return heightAt(x, y - this.originY, this.fieldSeed) > SEA ? 'land' : 'water';
   }
 
   /** Open water: a base plane plus scrolling swell lines. */
@@ -329,98 +328,94 @@ export class Terrain {
     }
   }
 
-  render(R, pal, time, y0, y1, layerOf = null) {
-    for (const f of this.features) {
-      // Off-screen features are still in the list waiting to scroll in; drawing
-      // them is pure overdraw on the most fill-heavy shapes in the game.
-      if (f.y + f.w < y0 - 40 || f.y - f.w > y1 + 40) continue;
-      switch (f.kind) {
-        case 'island': {
-          for (const l of f.lobes) {
-            const x = f.x + l.dx, y = f.y + l.dy;
-            // Surf ring, beach, then the land plate on top.
-            R.ring(x, y, l.r * 1.12, 2.4, pal.surf[0] * 1.35, pal.surf[1] * 1.35,
-              pal.surf[2] * 1.35, 0.20);
-           R.polyLit(x, y, l.r * 1.05, l.sides, l.rot, pal.sand[0], pal.sand[1], pal.sand[2], 0.9, 0.5,
-              MAT.SHORE, 46);
-            R.polyLit(x, y, l.r * 0.82, l.sides, l.rot + 0.3, pal.land[0], pal.land[1], pal.land[2], 1, 0.75,
-              MAT.ISLAND, 74);
-          }
-          break;
-        }
-        case 'base': {
-          const rw = f.runway;
-          const rx = f.x + rw.dx, ry = f.y;
-          R.polyLit(f.x, f.y, f.w * 0.62, 7, 0.4, pal.land[0], pal.land[1], pal.land[2], 1, 0.6,
-            MAT.BASE, 64);
-          R.slabLit(rx, ry, rw.len * 0.5, f.w * 0.055, rw.rot, 0.20, 0.21, 0.23, 1, 0.4);
-          // Centreline dashes read as a runway rather than a grey bar.
-          for (let i = -3; i <= 3; i++) {
-            const t = i / 7;
-            R.slabLit(rx + Math.cos(rw.rot) * rw.len * t, ry + Math.sin(rw.rot) * rw.len * t,
-              rw.len * 0.035, f.w * 0.008, rw.rot, 0.7, 0.7, 0.62, 0.8, 0);
-          }
-          for (const p of f.pads) {
-            R.slabLit(f.x + p.dx, f.y + p.dy, p.w, p.h, p.rot, 0.30, 0.32, 0.31, 1, 0.85, MAT.BASE, 30);
-            R.slabLit(f.x + p.dx, f.y + p.dy - p.h * 0.45, p.w * 0.8, p.h * 0.25, p.rot,
-              0.42, 0.44, 0.42, 1, 0.6);
-          }
-          break;
-        }
-        case 'convoy': {
-          for (const sh of f.ships) {
-            const x = f.x + sh.dx, y = f.y + sh.dy;
-            R.glow(x, y, sh.len * 1.5, pal.surf[0], pal.surf[1], pal.surf[2], 0.16, 2.2);
-            R.slabLit(x, y, sh.len, sh.len * 0.24, Math.PI / 2 + sh.rot, 0.26, 0.28, 0.30, 1, 0.8,
-              MAT.HULL_SEA, 22);
-            R.slabLit(x, y - sh.len * 0.15, sh.len * 0.3, sh.len * 0.16, Math.PI / 2 + sh.rot,
-              0.38, 0.40, 0.42, 1, 0.7);
-          }
-          break;
-        }
-        default: {
-          for (const rk of f.rocks) {
-            const x = f.x + rk.dx, y = f.y + rk.dy;
-            // Wash ring stays (it is the water breaking), but the rock itself is
-            // a baked outcrop now. A flat lit polygon was the last placeholder
-            // shape on the map and it showed next to everything else.
-            // Surf, not a slab. At 1.3x radius and 0.18 alpha this was a flat
-            // translucent polygon larger than the rock inside it — the most
-            // obviously untextured thing left on the map once the rock itself
-            // was baked. A thin broken ring reads as water breaking on stone.
-            R.ring(x, y, rk.r * 1.16, 2.0, pal.surf[0] * 1.4, pal.surf[1] * 1.4,
-              pal.surf[2] * 1.4, 0.22);
-            R.glow(x, y, rk.r * 1.5, pal.surf[0], pal.surf[1], pal.surf[2], 0.06, 2.6);
-            if (layerOf) {
-              const layer = layerOf('outcrop');
-              if (layer >= 0) {
-                R.craftShadow(x + rk.r * 0.26, y + rk.r * 0.20, rk.r * 1.35, rk.rot, layer, 0.30);
-                R.craft(x, y, rk.r * 1.35, rk.rot, layer, 0.40, 0.40, 0.40, 1, [0.44, 0.40, 0.30]);
-                continue;
-              }
-            }
-            R.polyLit(x, y, rk.r, rk.sides, rk.rot, pal.land[0] * 1.1, pal.land[1] * 1.1, pal.land[2] * 1.1, 1, 0.8,
-              MAT.ISLAND, 40);
-          }
-          break;
+  /**
+   * Settlements.
+   *
+   * Placed where the FIELD says a building could stand — flat, above the shore,
+   * near the road — and clustered per plot, rather than sprinkled at random
+   * offsets from a feature centre. One deterministic hash per plot decides
+   * everything about it, so a village is identical every time it scrolls back
+   * into view.
+   */
+  renderSettlements(R, x0, x1, y0, y1, layerOf) {
+    if (!layerOf) return;
+    const PLOT = 104;
+    const seed = this.fieldSeed;
+    const oy = this.originY;
+    const KINDS = ['hangar', 'depot', 'silo', 'containers', 'bunker', 'tower',
+      'radar', 'mast', 'grove', 'grove', 'grove', 'outcrop'];
+
+    const cy0 = Math.floor((y0 - oy - PLOT) / PLOT);
+    const cy1 = Math.ceil((y1 - oy + PLOT) / PLOT);
+    const cx0 = Math.floor((x0 - PLOT) / PLOT);
+    const cx1 = Math.ceil((x1 + PLOT) / PLOT);
+
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        let hsh = (Math.imul(cx, 374761393) + Math.imul(cy, 668265263)
+          + Math.imul(seed, 15485863)) | 0;
+        hsh = Math.imul(hsh ^ (hsh >>> 13), 1274126177);
+        const rnd = (n) => {
+          hsh = Math.imul(hsh ^ (hsh >>> 15), 2246822519);
+          return ((hsh >>> 0) / 4294967296) * n;
+        };
+        const n = 1 + Math.floor(rnd(3.6));
+        for (let i = 0; i < n; i++) {
+          const wx = cx * PLOT + rnd(PLOT);
+          const wy = cy * PLOT + rnd(PLOT);
+          const type = KINDS[Math.floor(rnd(KINDS.length)) % KINDS.length];
+          const rr = 10 + rnd(11);
+          // Vegetation will grow on rougher ground than a hangar will stand on.
+          const need = (type === 'grove' || type === 'outcrop') ? 0.28 : 0.58;
+          if (buildScore(wx, wy, seed) < need) continue;
+          const layer = layerOf(type);
+          if (layer < 0) continue;
+          const sy = wy + oy;
+          if (sy < y0 - 70 || sy > y1 + 70) continue;
+          R.craftShadow(wx + rr * 0.28, sy + rr * 0.22, rr * 1.35, 0, layer, 0.32);
+          R.craft(wx, sy, rr * 1.35, 0, layer, 0.40, 0.40, 0.40, 1, [0.44, 0.40, 0.30]);
         }
       }
+    }
+  }
 
-      // Structures, drawn from the same baked atlas the craft use, so a hangar
-      // on an island is lit and shadowed exactly like an aircraft is.
+  render(R, pal, time, y0, y1, layerOf = null) {
+    const x0 = this.x0v, x1 = this.x1v;
+
+    // The land: ONE quad. Everything about the coast — its shape, its
+    // antialiasing, its surf, its relief — is resolved per pixel inside it.
+    R.terrainPal.sand = [pal.sand[0] * 1.15, pal.sand[1] * 1.05, pal.sand[2] * 0.78];
+    R.terrainPal.grass = [pal.land[0] * 0.85, pal.land[1] * 1.20, pal.land[2] * 0.68];
+    R.terrainPal.scrub = [pal.land[0] * 0.62, pal.land[1] * 0.90, pal.land[2] * 0.56];
+    R.terrainPal.rock = [pal.land[0] * 1.18, pal.land[1] * 1.16, pal.land[2] * 1.20];
+    R.terrainPal.surf = [pal.surf[0] * 0.85, pal.surf[1] * 0.95, pal.surf[2] * 1.05];
+    R.terrain((x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2 + 4, (y1 - y0) / 2 + 4,
+      this.originY, this.fieldSeed);
+
+    this.renderSettlements(R, x0, x1, y0, y1, layerOf);
+
+    // Convoys are the one feature still living on open water.
+    for (const f of this.features) {
+      if (f.kind !== 'convoy') continue;
+      if (f.y + f.w < y0 - 40 || f.y - f.w > y1 + 40) continue;
+      for (const sh of f.ships) {
+        const x = f.x + sh.dx, y = f.y + sh.dy;
+        R.glow(x, y, sh.len * 1.5, pal.surf[0], pal.surf[1], pal.surf[2], 0.16, 2.2);
+        R.slabLit(x, y, sh.len, sh.len * 0.24, Math.PI / 2 + sh.rot,
+          0.26, 0.28, 0.30, 1, 0.8, MAT.HULL_SEA, 22);
+        R.slabLit(x, y - sh.len * 0.15, sh.len * 0.3, sh.len * 0.16,
+          Math.PI / 2 + sh.rot, 0.38, 0.40, 0.42, 1, 0.7);
+      }
       if (layerOf && f.props) {
         for (const pr of f.props) {
           const layer = layerOf(pr.type);
           if (layer < 0) continue;
           const px = f.x + pr.dx, py = f.y + pr.dy;
-          const size = pr.r * 1.35;
-          R.craftShadow(px + pr.r * 0.28, py + pr.r * 0.22, size, pr.rot, layer, 0.34);
-          // 0.4 is the tint that comes out NEUTRAL through the shader's
-          // mix(1, tint * 2.5, 0.55). Passing 1,1,1 reads as 1.83x and turned
-          // every building and tree into a white blob.
-          R.craft(px, py, size, pr.rot, layer, 0.40, 0.40, 0.40, 1, [0.44, 0.40, 0.30]);
+          R.craftShadow(px + pr.r * 0.28, py + pr.r * 0.22, pr.r * 1.35, pr.rot, layer, 0.34);
+          R.craft(px, py, pr.r * 1.35, pr.rot, layer, 0.40, 0.40, 0.40, 1, [0.44, 0.40, 0.30]);
         }
       }
     }
+
   }
 }

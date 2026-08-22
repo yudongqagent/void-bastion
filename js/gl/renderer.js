@@ -20,6 +20,7 @@ export const SHAPE = {
   SPARK:5,  // elongated glow — debris streaks
   CRAFT:6,  // baked craft sprite — lit dynamically from its baked normal
   SHADOW:7, // a craft's alpha mask alone, for the drop shadow
+  TERRAIN:8,// the heightfield, resolved per pixel in the fragment shader
 };
 
 const FLOATS_PER_INSTANCE = 14;
@@ -45,6 +46,7 @@ flat out float v_rot;
 out vec2 v_uv;
 flat out float v_layer;
 flat out float v_accentB;
+out vec2 v_world;
 
 void main() {
   v_local = a_corner;
@@ -72,6 +74,9 @@ void main() {
   vec2 p = a_corner * a_size;
   p = vec2(p.x * c - p.y * s, p.x * s + p.y * c) + a_pos;
 
+  // World position, for the terrain shader to evaluate its field at.
+  v_world = p;
+
   vec2 clip = (p / u_res) * 2.0 - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
 }`;
@@ -87,6 +92,7 @@ flat in float v_rot;
 in vec2 v_uv;
 flat in float v_layer;
 flat in float v_accentB;
+in vec2 v_world;
 out vec4 outColor;
 
 // Material layers. sampler2DArray rather than an atlas: each material wraps and
@@ -205,6 +211,85 @@ vec4 craftSprite(vec3 tint, vec3 accent) {
   return vec4(rgb, alb.a);
 }
 
+// --- the land ----------------------------------------------------------------
+//
+// The same field as js/game/heightfield.js, evaluated PER PIXEL.
+//
+// The map used to be convex polygons, which cannot make a bay. Sampling the
+// field on a grid of quads cannot either — each cell's alpha is uniform over
+// its own footprint, so the waterline can only ever be quantised to the grid,
+// and every variant of that approach produced a staircase. Resolving the
+// contour in the fragment shader is the only way to get a coastline that is
+// actually a contour: it is exact at pixel resolution and antialiases
+// analytically from the field's own gradient.
+//
+// The hash matches JS bit for bit (Math.imul there, 32-bit wrap here), so
+// gameplay placement and the drawn coast can never disagree.
+uniform vec3 u_tSand, u_tGrass, u_tScrub, u_tRock, u_tSurf;
+
+float thash(int ix, int iy) {
+  uint h = uint(ix * 374761393 + iy * 668265263);
+  h = (h ^ (h >> 13u)) * 1274126177u;
+  h = h ^ (h >> 16u);
+  return float(h) * (1.0 / 4294967296.0);
+}
+
+float tnoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = p - i;
+  f = f * f * (3.0 - 2.0 * f);
+  int x0 = int(i.x), y0 = int(i.y);
+  return mix(
+    mix(thash(x0, y0), thash(x0 + 1, y0), f.x),
+    mix(thash(x0, y0 + 1), thash(x0 + 1, y0 + 1), f.x), f.y);
+}
+
+float tfbm(vec2 p, int oct, float gain) {
+  float s = 0.0, amp = 1.0, norm = 0.0, fr = 1.0;
+  for (int i = 0; i < 4; i++) {
+    if (i >= oct) break;
+    s += tnoise(p * fr + vec2(float(i) * 31.7, float(i) * 17.3)) * amp;
+    norm += amp; amp *= gain; fr *= 2.0;
+  }
+  return s / norm;
+}
+
+float tridge(vec2 p, int oct) {
+  float s = 0.0, amp = 1.0, norm = 0.0, fr = 1.0;
+  for (int i = 0; i < 3; i++) {
+    if (i >= oct) break;
+    float n = abs(tnoise(p * fr + vec2(float(i) * 51.1, float(i) * 23.9)) - 0.5) * 2.0;
+    s += (1.0 - n) * amp; norm += amp; amp *= 0.5; fr *= 2.0;
+  }
+  return s / norm;
+}
+
+float landHeight(vec2 w, float seed) {
+  vec2 q = w / 340.0 + vec2(seed * 13.7, seed * 7.1);
+  float continent = tfbm(q * 0.55, 4, 0.52);
+  float coast = tfbm(q * 2.1, 3, 0.5);
+  float h = continent * 0.78 + coast * 0.22;
+  float spine = tridge(q * 1.15, 3);
+  h += max(0.0, h - 0.60) * spine * 0.55;
+  float riv = tridge(q * 0.75 + vec2(40.3, 11.9), 2);
+  float channel = pow(clamp((riv - 0.86) / 0.14, 0.0, 1.0), 1.5);
+  return h - channel * 0.16;
+}
+
+float landRoad(vec2 w, float seed) {
+  vec2 q = w / 340.0 + vec2(seed * 13.7, seed * 7.1);
+  float wander = (tfbm(vec2(q.y * 0.9, 3.1), 3, 0.5) - 0.5) * 1.5;
+  return clamp(1.0 - abs(q.x - 0.5 - wander) / 0.055, 0.0, 1.0);
+}
+
+const float T_SEA = 0.478;
+const float T_SHORE = 0.512;
+const float T_GRASS = 0.566;
+const float T_SCRUB = 0.628;
+// Layer indices into the material atlas, in tools/materials.mjs order.
+const float L_SAND = 13.0;
+const float L_ROCK = 12.0;
+
 const float TAU = 6.28318530718;
 
 // Regular n-gon with circumradius 1, negative inside.
@@ -282,10 +367,56 @@ void main() {
     vec4 cs = craftSprite(v_color.rgb, vec3(v_param.x, v_param.y, v_accentB));
     rgb = cs.rgb;
     alpha = cs.a;
-  } else {                                  // SHADOW
+  } else if (v_shape == 7) {                // SHADOW
     if (u_craftOn < 0.5) discard;
     alpha = texture(u_craft, vec3(v_uv, v_layer)).a;
     rgb = vec3(0.0);
+  } else {                                  // TERRAIN
+    // v_param.x is the world scroll offset, v_param.y the field seed.
+    vec2 w = vec2(v_world.x, v_world.y - v_param.x);
+    float h = landHeight(w, v_param.y);
+
+    // Analytic antialiasing straight off the field's gradient. Derivatives are
+    // taken before any discard so the whole quad still has valid neighbours.
+    float hw = fwidth(h);
+    alpha = smoothstep(T_SEA - hw, T_SEA + hw, h);
+    float dhx = dFdx(h), dhy = dFdy(h);
+    if (alpha <= 0.003) discard;
+
+    // Relief. The gradient is already in hand, so slopes shade for free.
+    float lit = clamp(0.80 + (-dhx * 0.42 - dhy * 0.90) * 240.0, 0.42, 1.18);
+
+    // A continuous colour ramp — no bands, so no boundaries to see.
+    // Sand holds through the whole shore band before grass takes over. Starting
+    // the blend at SHORE made the beach a few pixels wide on any slope, so the
+    // coast went straight from open water to inland with nothing between.
+    vec3 col = mix(u_tSand, u_tGrass, smoothstep(T_SHORE, T_GRASS + 0.018, h));
+    col = mix(col, u_tScrub, smoothstep(T_GRASS, T_SCRUB, h));
+    col = mix(col, u_tRock, smoothstep(T_SCRUB, T_SCRUB + 0.055, h));
+
+    // Surface detail from the material atlas, in world space so it is
+    // continuous across the whole landmass.
+    if (u_texOn > 0.5) {
+      vec2 duv = w / 46.0;
+      vec3 dSand = texture(u_mat, vec3(w / 30.0, L_SAND)).rgb;
+      vec3 dRock = texture(u_mat, vec3(duv, L_ROCK)).rgb;
+      float sandy = 1.0 - smoothstep(T_SHORE, T_GRASS, h);
+      vec3 det = mix(dRock, dSand, sandy) * 1.6;
+      // Centred on 1.0: this is surface DETAIL, not a brightness boost.
+      col *= 0.70 + 0.36 * dot(det, vec3(0.3333));
+    }
+
+    // Road: graded, pale, and never crossing the beach.
+    float road = landRoad(w, v_param.y) * smoothstep(T_SHORE, T_SHORE + 0.012, h);
+    col = mix(col, vec3(0.42, 0.40, 0.36), smoothstep(0.25, 0.75, road) * 0.85);
+
+    // Surf, as a band of the CONTOUR rather than a ring around a shape.
+    // Surf: a bright wet line hugging the contour, plus a wider damp band.
+    float surfLine = 1.0 - smoothstep(0.0, 0.011, h - T_SEA);
+    float damp = 1.0 - smoothstep(0.0, 0.034, h - T_SEA);
+    col += u_tSurf * (surfLine * 0.55 + damp * 0.18);
+
+    rgb = col * lit;
   }
 
   alpha *= v_color.a;
@@ -453,6 +584,11 @@ export class Renderer {
     this.flash = [0, 0, 0];
     this.bloomIntensity = 0.62;
     this.bloomThreshold = 0.95;
+    this.terrainPal = {
+      sand: [0.62, 0.55, 0.38], grass: [0.24, 0.40, 0.22],
+      scrub: [0.18, 0.30, 0.17], rock: [0.42, 0.41, 0.40],
+      surf: [0.30, 0.45, 0.55],
+    };
     this.grade = [1, 1, 1];
     this.saturation = 1;
     this.vignette = 0.55;
@@ -620,6 +756,16 @@ export class Renderer {
     return n;
   }
 
+  /**
+   * The land: one quad, with the coastline resolved per pixel inside it.
+   *
+   * @param {number} originY world scroll offset — worldY = screenY - originY
+   * @param {number} seed which world this is
+   */
+  terrain(x, y, hw, hh, originY, seed) {
+    this.push(SHAPE.TERRAIN, x, y, hw, hh, 0, 1, 1, 1, 1, originY, seed);
+  }
+
   begin() { this.count = 0; }
 
   /**
@@ -736,6 +882,14 @@ export class Renderer {
       gl.useProgram(this.progQuad);
       gl.uniform2f(this.uQuad.u_res, this.cssWidth, this.cssHeight);
       gl.uniform1f(this.uQuad.u_texOn, this.materialsReady ? 1 : 0);
+      // Terrain palette lives in uniforms rather than in the instance data:
+      // it is constant for the whole frame, and the instance has no room.
+      const tp = this.terrainPal;
+      gl.uniform3f(this.uQuad.u_tSand, tp.sand[0], tp.sand[1], tp.sand[2]);
+      gl.uniform3f(this.uQuad.u_tGrass, tp.grass[0], tp.grass[1], tp.grass[2]);
+      gl.uniform3f(this.uQuad.u_tScrub, tp.scrub[0], tp.scrub[1], tp.scrub[2]);
+      gl.uniform3f(this.uQuad.u_tRock, tp.rock[0], tp.rock[1], tp.rock[2]);
+      gl.uniform3f(this.uQuad.u_tSurf, tp.surf[0], tp.surf[1], tp.surf[2]);
       gl.uniform1i(this.uQuad.u_mat, 0);
       gl.uniform1i(this.uQuad.u_surf, 1);
       gl.uniform1f(this.uQuad.u_craftOn, this.craftReady ? 1 : 0);

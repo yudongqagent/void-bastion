@@ -39,11 +39,13 @@ const silentSynth = new Proxy({}, { get: () => () => {} });
 // Records draw calls so we can assert the renderer is actually being fed.
 const stubRenderer = {
   flash: [0, 0, 0], calls: 0,
+  terrainPal: { sand: [0, 0, 0], grass: [0, 0, 0], scrub: [0, 0, 0],
+    rock: [0, 0, 0], surf: [0, 0, 0] },
   begin() { this.calls = 0; },
   push() { this.calls++; },
   glow() { this.calls++; }, disc() { this.calls++; }, ring() { this.calls++; },
   poly() { this.calls++; }, beam() { this.calls++; }, spark() { this.calls++; },
-  ellipseLit() { this.calls++; },
+  ellipseLit() { this.calls++; }, terrain() { this.calls++; },
   polyLit() { this.calls++; }, discLit() { this.calls++; },
   slabLit() { this.calls++; }, beamLit() { this.calls++; },
   flush() {},

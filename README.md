@@ -172,6 +172,40 @@ wave totals — and therefore the entire prestige curve — are untouched.
 
 ## Design notes
 
+### The map is a heightfield, resolved per pixel
+
+The map used to be convex polygons floating on a plane — `makeIsland` built 3-5
+lobes and drew each as a heptagon with a concentric sand ring. A convex polygon
+cannot make a bay, so it could not make a coastline, so the map could never read
+as land however good the texture on it was. Same mistake as the craft: the shape
+carried no information and I kept improving the surface.
+
+`js/game/heightfield.js` is one continuous field, infinite in y — a continental
+term, a coast term to roughen the waterline, a mountain spine, and river
+channels cut down through whatever they cross. Land is simply where it rises
+above sea level.
+
+**The contour is resolved in the fragment shader, not on a grid.** This matters
+and it is the part that took several attempts. Sampling the field into a grid of
+quads cannot work: each cell's alpha is uniform over its own footprint, so the
+waterline is always quantised to the grid. Hard quads showed a tile grid;
+oversized soft quads painted 27% of the lane for 8.8% actual land and swallowed
+every bay; overlapping discs still stepped. Evaluating the field per pixel gives
+an exact coastline that antialiases analytically from the field's own gradient
+(`smoothstep(SEA ± fwidth(h), h)`), and relief comes free from `dFdx/dFdy` of
+the height.
+
+The whole landmass is **one quad**, measured at **0.28 ms of a 16.7 ms frame**.
+
+The GLSL hash matches the JS one bit for bit — `Math.imul` on the JS side gives
+it the same 32-bit wrapping the GPU has, verified identical over 1M samples. So
+`surfaceAt`, settlement placement and turret anchoring all agree with the coast
+that is actually drawn, rather than being a second independent guess at it.
+
+Settlements are placed where the field says a building could stand — flat, above
+the shore, near the road — and clustered per plot from one deterministic hash,
+so a village is identical every time it scrolls back into view.
+
 ### The difficulty curve was inverted
 
 Enemy health was `9 * w^1.75 * 1.036^w`, and the polynomial made the curve run
